@@ -15,7 +15,7 @@ Core keeps its default Amplify hostname initially. Its protected HTTPS origin us
 
 **No cloud resources, subscriptions or DNS records were created.** Deployment will incur charges. Read the [cost guide](docs/COSTS.md) before executing the deployment steps. Amplify builds also have usage charges; the environment gate is an intentional opt-in, not a bill cap.
 
-Core changes are supplied separately in the NCE_Core repository; apply that feature branch before deployment. This source contains no AWS credentials, client secrets, private keys or Canva editor links.
+Core changes are in [NCE_Core PR #1](https://github.com/NorthCountryEngineer/NCE_Core/pull/1), branch `codex/aws-axolotl-integration`; deploy that reviewed branch or merge it before deployment. This source contains no AWS credentials, client secrets, private keys or Canva editor links.
 
 ## Free local preview
 

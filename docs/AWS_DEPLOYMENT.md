@@ -23,7 +23,7 @@ This small Core topology favors a modest baseline over high availability: one ta
 
 ## 1. Review locally before spending anything
 
-Read [COSTS.md](COSTS.md), the infrastructure files, and the Core security/deployment documentation. Use the Core `codex/aws-axolotl-integration` branch or merge its supplied pull request into your chosen production branch before starting. Decide which existing AWS account and Region to use. Keep one production branch for each app, disable automatic preview branches, and leave optional AI providers, Kubernetes provisioning, SMS, WAF, NAT gateways, and paid add-ons disabled.
+Read [COSTS.md](COSTS.md), the infrastructure files, and the Core security/deployment documentation. Use the Core `codex/aws-axolotl-integration` branch or review and merge [NCE Core PR #1](https://github.com/NorthCountryEngineer/NCE_Core/pull/1) into your chosen production branch before starting. Axolotl source is public at [NorthCountryEngineer/Axolotl_News](https://github.com/NorthCountryEngineer/Axolotl_News). Decide which existing AWS account and Region to use. Keep one production branch for each app, disable automatic preview branches, and leave optional AI providers, Kubernetes provisioning, SMS, WAF, NAT gateways, and paid add-ons disabled.
 
 Axolotl local checks, from this checkout:
 
