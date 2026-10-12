@@ -1,0 +1,500 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Axolotl News Core-bound serverless API. Deployment is billable; no resources exist until deployed.",
+  "Parameters": {
+    "ApplicationOrigin": {
+      "Type": "String",
+      "AllowedPattern": "^https://[a-zA-Z0-9.-]+$",
+      "Default": "https://axolotl.news"
+    },
+    "CoreIssuer": {
+      "Type": "String",
+      "AllowedPattern": "^https://[a-zA-Z0-9.-]+$"
+    },
+    "CoreOrganizationId": {
+      "Type": "String",
+      "AllowedPattern": "^[a-f0-9-]{36}$"
+    },
+    "CoreServiceId": {
+      "Type": "String",
+      "AllowedPattern": "^[a-f0-9-]{36}$"
+    },
+    "CoreCredentialsParameter": {
+      "Type": "String",
+      "AllowedPattern": "^/[a-zA-Z0-9/_-]+$",
+      "Default": "/axolotl-news/core-resource-client"
+    },
+    "LambdaCodeBucket": {
+      "Type": "String",
+      "AllowedPattern": "^[a-z0-9.-]+$"
+    },
+    "LambdaCodeKey": {
+      "Type": "String",
+      "AllowedPattern": "^[a-zA-Z0-9/_.-]+$",
+      "Default": "axolotl-api.zip"
+    },
+    "LambdaReservedConcurrency": {
+      "Type": "Number",
+      "Default": 2,
+      "AllowedValues": [
+        0,
+        1,
+        2
+      ],
+      "Description": "2 for bounded concurrency; 0 omits a reservation if the account quota cannot preserve 100 unreserved executions. Not a bill cap."
+    }
+  },
+  "Resources": {
+    "PrivatePosts": {
+      "Type": "AWS::DynamoDB::Table",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "id",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "id",
+            "KeyType": "HASH"
+          }
+        ],
+        "PointInTimeRecoverySpecification": {
+          "PointInTimeRecoveryEnabled": false
+        },
+        "SSESpecification": {
+          "SSEEnabled": true
+        }
+      }
+    },
+    "PublishedPosts": {
+      "Type": "AWS::DynamoDB::Table",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "id",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "id",
+            "KeyType": "HASH"
+          }
+        ],
+        "PointInTimeRecoverySpecification": {
+          "PointInTimeRecoveryEnabled": false
+        },
+        "SSESpecification": {
+          "SSEEnabled": true
+        }
+      }
+    },
+    "Media": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "IgnorePublicAcls": true,
+          "BlockPublicPolicy": true,
+          "RestrictPublicBuckets": true
+        },
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "CorsConfiguration": {
+          "CorsRules": [
+            {
+              "AllowedOrigins": [
+                {
+                  "Ref": "ApplicationOrigin"
+                }
+              ],
+              "AllowedHeaders": [
+                "*"
+              ],
+              "AllowedMethods": [
+                "GET",
+                "HEAD",
+                "POST"
+              ],
+              "ExposedHeaders": [
+                "ETag"
+              ],
+              "MaxAge": 300
+            }
+          ]
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "AbortIncompleteUploads",
+              "Status": "Enabled",
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 1
+              }
+            }
+          ]
+        }
+      }
+    },
+    "MediaTLS": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "Media"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "Media",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${Media.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "ApiRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "NewsroomOnly",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:Scan",
+                    "dynamodb:ConditionCheckItem"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "PrivatePosts",
+                        "Arn"
+                      ]
+                    },
+                    {
+                      "Fn::GetAtt": [
+                        "PublishedPosts",
+                        "Arn"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:PutObject",
+                    "s3:DeleteObject"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${Media.Arn}/*"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "s3:ListBucket",
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "Media",
+                      "Arn"
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "ssm:GetParameter",
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${CoreCredentialsParameter}"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${ApiLogGroup.Arn}"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "kms:Decrypt",
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "kms:ViaService": {
+                        "Fn::Sub": "ssm.${AWS::Region}.amazonaws.com"
+                      },
+                      "kms:EncryptionContext:PARAMETER_ARN": {
+                        "Fn::Sub": "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${CoreCredentialsParameter}"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "ApiLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${AWS::StackName}-api"
+        },
+        "RetentionInDays": 7
+      }
+    },
+    "ApiFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${AWS::StackName}-api"
+        },
+        "Runtime": "python3.12",
+        "Architectures": [
+          "arm64"
+        ],
+        "Handler": "handler.handler",
+        "MemorySize": 256,
+        "Timeout": 30,
+        "ReservedConcurrentExecutions": {
+          "Fn::If": [
+            "ReserveConcurrency",
+            {
+              "Ref": "LambdaReservedConcurrency"
+            },
+            {
+              "Ref": "AWS::NoValue"
+            }
+          ]
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "ApiRole",
+            "Arn"
+          ]
+        },
+        "Code": {
+          "S3Bucket": {
+            "Ref": "LambdaCodeBucket"
+          },
+          "S3Key": {
+            "Ref": "LambdaCodeKey"
+          }
+        },
+        "Environment": {
+          "Variables": {
+            "PRIVATE_TABLE": {
+              "Ref": "PrivatePosts"
+            },
+            "PUBLIC_TABLE": {
+              "Ref": "PublishedPosts"
+            },
+            "MEDIA_BUCKET": {
+              "Ref": "Media"
+            },
+            "CORE_ISSUER": {
+              "Ref": "CoreIssuer"
+            },
+            "CORE_ORGANIZATION_ID": {
+              "Ref": "CoreOrganizationId"
+            },
+            "CORE_SERVICE_ID": {
+              "Ref": "CoreServiceId"
+            },
+            "CORE_CREDENTIALS_PARAMETER": {
+              "Ref": "CoreCredentialsParameter"
+            }
+          }
+        }
+      }
+    },
+    "HttpApi": {
+      "Type": "AWS::ApiGatewayV2::Api",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "${AWS::StackName}-api"
+        },
+        "ProtocolType": "HTTP",
+        "CorsConfiguration": {
+          "AllowOrigins": [
+            {
+              "Ref": "ApplicationOrigin"
+            }
+          ],
+          "AllowHeaders": [
+            "authorization",
+            "content-type"
+          ],
+          "AllowMethods": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE",
+            "OPTIONS"
+          ],
+          "MaxAge": 300
+        }
+      }
+    },
+    "ApiIntegration": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "IntegrationType": "AWS_PROXY",
+        "IntegrationUri": {
+          "Fn::GetAtt": [
+            "ApiFunction",
+            "Arn"
+          ]
+        },
+        "PayloadFormatVersion": "2.0",
+        "TimeoutInMillis": 30000
+      }
+    },
+    "ApiRoute": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "RouteKey": "$default",
+        "Target": {
+          "Fn::Sub": "integrations/${ApiIntegration}"
+        }
+      }
+    },
+    "ApiStage": {
+      "Type": "AWS::ApiGatewayV2::Stage",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "StageName": "$default",
+        "AutoDeploy": true,
+        "DefaultRouteSettings": {
+          "ThrottlingBurstLimit": 10,
+          "ThrottlingRateLimit": 5
+        }
+      }
+    },
+    "ApiPermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "ApiFunction"
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*"
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "ApiUrl": {
+      "Value": {
+        "Fn::GetAtt": [
+          "HttpApi",
+          "ApiEndpoint"
+        ]
+      }
+    },
+    "MediaBucket": {
+      "Value": {
+        "Ref": "Media"
+      }
+    },
+    "PrivateTable": {
+      "Value": {
+        "Ref": "PrivatePosts"
+      }
+    },
+    "PublishedTable": {
+      "Value": {
+        "Ref": "PublishedPosts"
+      }
+    },
+    "FunctionName": {
+      "Value": {
+        "Ref": "ApiFunction"
+      }
+    }
+  },
+  "Conditions": {
+    "ReserveConcurrency": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "LambdaReservedConcurrency"
+            },
+            0
+          ]
+        }
+      ]
+    }
+  }
+}

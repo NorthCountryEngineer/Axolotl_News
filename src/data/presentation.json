@@ -1,0 +1,47 @@
+{
+  "designId": "DAHXRf8lZik",
+  "title": "Your paragraph text",
+  "displayTitle": "The Axolotl",
+  "viewUrl": "https://www.canva.com/d/FzMloLG4S7ylOK9",
+  "pageCount": 8,
+  "exportPending": true,
+  "source": "Canva rich text",
+  "importedAt": "2026-10-11",
+  "slides": [
+    {
+      "page": 1,
+      "text": " The Axolotl"
+    },
+    {
+      "page": 2,
+      "text": "One day an axolotl was swiming in a lake."
+    },
+    {
+      "page": 3,
+      "text": "And met an aolotl."
+    },
+    {
+      "page": 4,
+      "text": "Hi! said the other axolotl."
+    },
+    {
+      "page": 5,
+      "text": "Hi? said the axolotl."
+    },
+    {
+      "page": 6,
+      "text": "And after that day they were bff,s"
+    },
+    {
+      "page": 7,
+      "text": "THE END!!!!!!"
+    },
+    {
+      "page": 8,
+      "text": ""
+    }
+  ],
+  "previewSlides": [],
+  "previewsImported": false,
+  "previewImportNote": "Canva returned thumbnail metadata, but an ordinary GET of each exact thumbnail URL returned HTTP 403 Forbidden. No original artwork files were acquired."
+}

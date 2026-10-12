@@ -1,0 +1,16 @@
+node_modules/
+dist/
+amplify_outputs.json
+.amplify/
+.env*
+!.env.example
+!.env.local.example
+playwright-report/
+artifacts/
+*.log
+.DS_Store
+nce-config.json
+*credentials*.json
+infra/aws/build/
+__pycache__/
+*.pyc

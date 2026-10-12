@@ -1,0 +1,8 @@
+{
+  "issuer": "https://main.CORE_APP_ID.amplifyapp.com",
+  "organization_id": "UUID_FROM_CORE_REGISTRATION",
+  "service_id": "UUID_FROM_CORE_REGISTRATION",
+  "browser_client_id": "PUBLIC_CLIENT_ID_FROM_CORE",
+  "redirect_uri": "https://axolotl.news/oauth/callback",
+  "api_url": "https://HTTP_API_ID.execute-api.us-east-1.amazonaws.com"
+}

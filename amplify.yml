@@ -1,0 +1,20 @@
+version: 1
+backend:
+  phases:
+    build:
+      commands:
+        - 'test "$AXOLOTL_ENABLE_AWS_DEPLOYMENT" = "true" || { echo "AWS deployment is disabled. Read docs/AWS_DEPLOYMENT.md before enabling."; exit 1; }'
+        - npm ci --no-audit --no-fund
+        - 'if [ "$VITE_APP_MODE" = "cloud" ]; then npx ampx pipeline-deploy --branch "$AWS_BRANCH" --app-id "$AWS_APP_ID"; elif [ "$VITE_APP_MODE" != "nce" ]; then echo "Choose nce or cloud mode"; exit 1; fi'
+frontend:
+  phases:
+    build:
+      commands:
+        - npm run build
+  artifacts:
+    baseDirectory: dist
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - node_modules/**/*
