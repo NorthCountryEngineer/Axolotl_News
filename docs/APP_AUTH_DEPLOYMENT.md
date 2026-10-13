@@ -158,10 +158,10 @@ aws cloudformation wait stack-update-complete --stack-name "$CORE_STACK" \
 ```sh
 cd "$CORE_DIR"
 CORE_ENABLE_AWS_DEPLOYMENT=true .venv/bin/python infra/aws/run-management.py \
-  --stack "$CORE_STACK" --region "$AWS_REGION" -- migrate --noinput
+  --stack "$CORE_STACK" --region "$AWS_REGION" -- migrate identity 0009 --noinput
 ```
 
-This starts one temporary Fargate migration task. Wait for **Release command completed successfully.** If it fails, keep the service stopped and use the recovery instructions below. Do not run bootstrap, recreate the runtime secret, or register Axolotl again.
+This starts one temporary Fargate migration task and explicitly requires the new branding migration to exist in the image. Wait for **Release command completed successfully.** If it fails, keep the service stopped and use the recovery instructions below. The task's web log should report `Applying identity.0009_service_auth_name_service_auth_tagline_and_more... OK` on the first run. A retry can report no migrations to apply if that migration already succeeded. Do not run bootstrap, recreate the runtime secret, or register Axolotl again.
 
 ## 9. Restart Core and wait until it is healthy
 
@@ -183,6 +183,8 @@ aws ecs wait services-stable --cluster "$CORE_CLUSTER" --services "$CORE_SERVICE
 ```
 
 Open **https://main.dpn5tiolbymzn.amplifyapp.com** and verify your existing parent account still signs in. Core's Amplify proxy already forwards these pages; it needs no rebuild.
+
+If this returns **503**, stop before step 10. The service waiter alone does not verify the public HTTP response. A worker error such as `column identity_service.auth_name does not exist` means the new image is running without the branding schema. Run the explicit step 8 migration, wait for success, and let ECS replace the stopped service task. After migration succeeds, an `ecs update-service --force-new-deployment` on the existing service can start the replacement immediately; this is a user-run, billable deployment action. Do not rebuild the frontend or change DNS to resolve a missing database column.
 
 ## 10. Set Axolotl's sign-in branding in Core
 
