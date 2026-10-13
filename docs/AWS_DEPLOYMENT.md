@@ -405,12 +405,13 @@ Consent, token exchange, and newsroom permissions are separate steps. Clicking *
 | --- | --- |
 | Callback reports missing/invalid state | Start again in the same tab from the apex. The PKCE verifier is stored in that tab's session storage. |
 | Callback reports denial; no token request | Core denied the consent request or **Cancel** was submitted. Check the authorization response error before changing the API. |
+| Publishing API preflight returns 404 | Inspect the OPTIONS request's `Origin`, `Access-Control-Request-Method`, and `Access-Control-Request-Headers`. Expect `https://axolotl.news`, an allowed method, and allowed headers including `authorization`. Compare the deployed HTTP API's CORS policy and `$default` stage; do not assume a generic browser CORS error means the saved policy is missing. |
 | Token request is blocked by CORS/network | Browser client's exact allowed origin must be `https://axolotl.news`; Core's proxy must preserve token endpoint CORS headers. |
 | Token request returns `invalid_grant` | Start a fresh flow; check code expiry, the exact registered redirect URI, and PKCE. A code cannot be reused. |
 | Token request succeeds; `/session` returns 403 | Grant this membership a role with Axolotl `posts-write`. Grant `posts-publish` if publishing is intended. Include the production environment boundary under **Explicit access-tag grants**. |
 | Token request succeeds; `/session` returns 401 | Check issuer, organization, service/audience, current membership, and the browser/resource client's shared deployment. |
-| `/session` returns 503 | Check Core introspection connectivity and the confidential resource client. |
-| `/session` returns 500 | Inspect the API's server error, including access to `/axolotl-news/core-resource-client`; keep the parameter value private. |
+| `/session` returns 503 | Check Core introspection connectivity, the confidential resource client, and Lambda access to `/axolotl-news/core-resource-client`; keep the parameter value private. |
+| `/session` returns 500 | Check API Gateway's Lambda integration and invocation permission. |
 
 The API's rejection must be corrected at its source; disabling introspection, widening CORS, or accepting ID tokens would not repair this flow. These browser checks contact the deployed applications and can incur serving charges. Preparing a local frontend fix does not deploy it; a manually started Amplify build can also be billed.
 
