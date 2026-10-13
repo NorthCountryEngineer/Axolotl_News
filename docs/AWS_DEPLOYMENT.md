@@ -1,5 +1,7 @@
 # AWS deployment: NCE Core and Axolotl News
 
+Already deployed? Use the [app-branded sign-in upgrade](APP_AUTH_DEPLOYMENT.md) to update the existing Core image/database and Axolotl frontend without recreating resources, accounts, keys, or registrations.
+
 This is a runbook for a **future deployment that you choose to fund**. The application, infrastructure definitions, integration package, and deployment checks were prepared locally. No AWS resources, paid build, Cloudflare record, subscription, or account upgrade was created during this work. Do not run the cloud commands below while the original “no costs” condition remains in effect. Keeping both applications local is the only deployment option here that guarantees no AWS bill.
 
 The default deployment uses **NCE Core for identity and live permissions**. The older Cognito/Amplify Gen 2 alternative is documented separately in [DEPLOYMENT.md](DEPLOYMENT.md); choose one backend for an Axolotl environment. Do not run its `ampx pipeline-deploy` when following this NCE runbook.

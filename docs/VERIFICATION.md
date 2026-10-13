@@ -1,5 +1,13 @@
 # Verification record
 
+## October 13: app-branded authentication upgrade
+
+The invitation-only upgrade uses Core-hosted app branding and one central user account. Axolotl's 24 frontend tests pass, including the signup continuation retaining PKCE/state. Core's selected identity and external-application suite reports 124 tests, with 16 environment-dependent skips; all executed tests pass. It covers new and existing invited accounts, stable UUID after PKCE token exchange, explicit permission boundaries, expired/used/cross-organization invitations, callback validation, and same-origin browser form CSRF behavior. The migration consistency check passes.
+
+The actual Django templates were rendered locally and inspected in Chrome for sign-in, invitation entry, and account creation. This upgrade has not been deployed to AWS. No ECR push, database migration in production, new AWS resource, or Amplify build was started. Core's backend must be released and migrated before Axolotl's new account-creation button is released; see [APP_AUTH_DEPLOYMENT.md](APP_AUTH_DEPLOYMENT.md).
+
+The records below describe earlier implementation stages.
+
 Updated October 12, 2026. No AWS resources were provisioned, paid build started, certificate issued, or DNS record changed. GitHub publication is the only external write performed.
 
 ## Core integration checks

@@ -26,6 +26,21 @@ test('Core login generates PKCE S256 and unpredictable state without a browser s
   assert.equal(url.searchParams.get('code_challenge'), digest); assert.equal(url.searchParams.get('scope'), 'openid authorization'); assert.ok(!url.searchParams.has('client_secret')); assert.equal(h.calls.length, 0);
 });
 
+test('invitation account creation preserves the PKCE authorization continuation on Core', async () => {
+  const h = harness(); await h.api.beginCoreLogin('signup');
+  const signup = new URL(h.redirects[0]);
+  assert.equal(signup.origin, h.config.issuer);
+  assert.equal(signup.pathname, '/accounts/app-signup/');
+  const continuation = new URL(signup.searchParams.get('next')!, h.config.issuer);
+  assert.equal(continuation.origin, h.config.issuer);
+  assert.equal(continuation.pathname, '/oauth/authorize/');
+  assert.equal(continuation.searchParams.get('redirect_uri'), h.config.redirect_uri);
+  assert.equal(continuation.searchParams.get('client_id'), h.config.browser_client_id);
+  assert.equal(continuation.searchParams.get('code_challenge_method'), 'S256');
+  assert.equal(continuation.searchParams.get('state'), JSON.parse(h.store.get('axolotl-core-flow')!).state);
+  assert.equal(h.calls.length, 0);
+});
+
 test('callback validates state, exchanges code once, and discards ID token authority', async () => {
   const h = harness(); await h.api.beginCoreLogin(); const flow = JSON.parse(h.store.get('axolotl-core-flow')!);
   h.location.search = `?code=one-use-code&state=${flow.state}&iss=${encodeURIComponent(h.config.issuer)}`;

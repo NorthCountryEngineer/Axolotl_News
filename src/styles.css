@@ -8,3 +8,4 @@
 @media(max-width:650px){.site-header:has(.text-button){flex-wrap:wrap;height:auto;gap:12px;padding-top:15px;padding-bottom:15px}.site-header:has(.text-button) .editor-link{margin-left:auto}.site-header>.text-button{font-size:11px;white-space:nowrap}}
 
 .story-video-player{min-width:0}.story-video-player video{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#173d38;border:1px solid var(--line);border-radius:4px}.story-transcript{margin-top:16px;font-size:14px;line-height:1.7}.story-transcript summary{cursor:pointer;font-weight:600}.story-transcript p{white-space:pre-wrap}.story-video-player>p{line-height:1.6}
+.account-notice{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 7%;background:#e9eddf;border-bottom:1px solid var(--line)}.account-notice p{margin:0;line-height:1.5}.account-notice button{flex-shrink:0}

@@ -13,6 +13,8 @@ Follow the numbered [AWS deployment guide](docs/AWS_DEPLOYMENT.md) for **both ap
 
 Core keeps its default Amplify hostname initially. Its protected HTTPS origin uses `core-origin.axolotl.news`; the publication uses `axolotl.news`. The [marketplace package](nce/marketplace.json) registers an externally hosted Core application. Registration does not provision AWS infrastructure. Core's Kubernetes connector is unnecessary for this deployment.
 
+For the existing installation, follow the [app-branded sign-in upgrade](docs/APP_AUTH_DEPLOYMENT.md): release Core's backend and migration first, then Axolotl's frontend. Account creation is invitation-only. Accounts and passwords live in Core; each app's editing, publishing, and environment access remain explicit grants.
+
 **No cloud resources, subscriptions or DNS records were created.** Deployment will incur charges. Read the [cost guide](docs/COSTS.md) before executing the deployment steps. Amplify builds also have usage charges; the environment gate is an intentional opt-in, not a bill cap.
 
 Core changes are in [NCE_Core PR #1](https://github.com/NorthCountryEngineer/NCE_Core/pull/1), branch `codex/aws-axolotl-integration`; deploy that reviewed branch or merge it before deployment. This source contains no AWS credentials, client secrets, private keys or Canva editor links.

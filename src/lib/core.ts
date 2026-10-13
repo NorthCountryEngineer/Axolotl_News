@@ -48,13 +48,17 @@ async function exchange(fields: Record<string, string>, generation = sessionGene
   }
   sessionStorage.setItem(tokenKey, JSON.stringify(tokens)); return tokens;
 }
-export async function beginCoreLogin() {
+export async function beginCoreLogin(action: 'login' | 'signup' = 'login') {
   const c = config(), verifier = b64(crypto.getRandomValues(new Uint8Array(48))), state = b64(crypto.getRandomValues(new Uint8Array(32)));
   const challenge = b64(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
   sessionStorage.setItem(flowKey, JSON.stringify({ verifier, state, at: Date.now() }));
   const url = new URL(`${c.issuer}/oauth/authorize/`);
   url.search = new URLSearchParams({ client_id: c.browser_client_id, redirect_uri: c.redirect_uri, response_type: 'code', scope: 'openid authorization', state, code_challenge: challenge, code_challenge_method: 'S256' }).toString();
-  location.assign(url.href);
+  if (action === 'signup') {
+    const signup = new URL(`${c.issuer}/accounts/app-signup/`);
+    signup.searchParams.set('next', url.pathname + url.search);
+    location.assign(signup.href);
+  } else location.assign(url.href);
 }
 export function completeCoreLogin(): Promise<void> {
   if (callback) return callback;
