@@ -49,13 +49,33 @@ export default function App(){
   const confirm=useConfirm();
   const [path,setPath]=useState(location.pathname),[posts,setPosts]=useState<Post[]>([]),[error,setError]=useState(''),[loading,setLoading]=useState(true),[signed,setSigned]=useState(false),[dirty,setDirty]=useState(false);
   const [loginError,setLoginError]=useState('');
-  useEffect(()=>{if(isCore&&location.pathname==='/oauth/callback')void completeCoreLogin().then(async()=>{setPath('/studio');setSigned(await editorSession());}).catch(e=>{history.replaceState({},'','/studio');setPath('/studio');setLoginError(e.message);});},[]);
+  const [returningFromCore]=useState(isCore&&location.pathname==='/oauth/callback');
+  const [checkingLogin,setCheckingLogin]=useState(returningFromCore);
+  useEffect(()=>{
+    let active=true;
+    void (async()=>{
+      try {
+        if(returningFromCore)await completeCoreLogin();
+        if(!active)return;
+        const session=await editorSession();
+        if(!active)return;
+        setSigned(isCloud?session:false);
+        if(returningFromCore)setPath('/studio');
+      }catch(e){
+        if(!active)return;
+        setSigned(false);
+        if(returningFromCore){history.replaceState({},'','/studio');setPath('/studio');}
+        setLoginError((e as Error).message);
+      }finally{if(active)setCheckingLogin(false);}
+    })();
+    return()=>{active=false;};
+  },[returningFromCore]);
   const reload=useCallback(()=>{setLoading(true);void listPosts(true).then(p=>{setPosts(p.filter(p=>{try{parseDocument(p.document);return true;}catch{return false;}}));setError('');}).catch(e=>setError((e as Error).message)).finally(()=>setLoading(false));},[]);
   const onDirty=useCallback((v:boolean)=>setDirty(v),[]);
-  useEffect(()=>{reload();void editorSession().then(s=>setSigned(isCloud?s:false));},[reload]);
+  useEffect(()=>{reload();},[reload]);
   useEffect(()=>{const pop=async()=>{if(dirty&&!await confirm('Leave this draft without saving?')){history.pushState({},'',path);return;}setPath(location.pathname);window.scrollTo(0,0);};window.addEventListener('popstate',pop);const unload=(e:BeforeUnloadEvent)=>{if(dirty){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',unload);return()=>{window.removeEventListener('popstate',pop);window.removeEventListener('beforeunload',unload);};},[dirty,path,confirm]);
   async function navigate(next:string){if(next!==path&&dirty&&!await confirm('Leave this draft without saving?'))return;if(next!==path){history.pushState({},'',next);setPath(next);setDirty(false);window.scrollTo(0,0);}}
-  const studio=path==='/studio';
+  const studio=path==='/studio'||checkingLogin;
   const id=path.startsWith('/posts/')?path.split('/').pop():undefined;
-  return <><Header navigate={navigate} studio={studio} signed={signed}/>{!isCloud&&<div className="local-banner"><span>LOCAL PREVIEW</span> No AWS connection. Creations stay in this browser.</div>}{loginError&&<p className="error" role="alert">{loginError}</p>}{studio?signed?<Studio onChanged={reload} onDirty={onDirty}/>:<Login onLogin={()=>setSigned(true)}/>:id?<Article loading={loading} post={posts.find(p=>p.id===id)} navigate={navigate}/>:<Home posts={posts} navigate={navigate} error={error} loading={loading}/>}{!studio&&<footer className="site-footer"><a className="brand" href="/" onClick={e=>{e.preventDefault();navigate('/');}}><img src="/assets/axolotl-mark.svg" alt=""/><span>axolotl.news</span></a><p>Made with curiosity, creativity, and a whole lotl of love.</p><button onClick={()=>navigate('/studio')} className="text-button">Editor’s desk ↗</button></footer>}</>;
+  return <><Header navigate={navigate} studio={studio} signed={signed}/>{!isCloud&&<div className="local-banner"><span>LOCAL PREVIEW</span> No AWS connection. Creations stay in this browser.</div>}{loginError&&<p className="error" role="alert">{loginError}</p>}{checkingLogin?<main id="main" className="login-page"><p role="status">Finishing Core sign-in…</p></main>:studio?signed?<Studio onChanged={reload} onDirty={onDirty}/>:<Login onLogin={()=>setSigned(true)}/>:id?<Article loading={loading} post={posts.find(p=>p.id===id)} navigate={navigate}/>:<Home posts={posts} navigate={navigate} error={error} loading={loading}/>}{!studio&&<footer className="site-footer"><a className="brand" href="/" onClick={e=>{e.preventDefault();navigate('/');}}><img src="/assets/axolotl-mark.svg" alt=""/><span>axolotl.news</span></a><p>Made with curiosity, creativity, and a whole lotl of love.</p><button onClick={()=>navigate('/studio')} className="text-button">Editor’s desk ↗</button></footer>}</>;
 }

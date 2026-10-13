@@ -58,7 +58,45 @@ test('logout cancels pending refresh persistence and revokes the newly returned 
   let finish: () => void = () => {}; const wait = new Promise<void>(resolve => { finish = resolve; });
   h.respond(async (url: string) => { if (url.endsWith('/oauth/token/')) await wait; return { ok: true, json: async () => ({ access_token: 'new-access', refresh_token: 'new-refresh', token_type: 'Bearer', expires_in: 300 }) }; });
   const session = h.api.coreSession(); await new Promise(resolve => setTimeout(resolve, 0));
-  await h.api.coreLogout(); finish(); assert.equal(await session, false); assert.ok(!h.store.has('axolotl-core-tokens'));
+  await h.api.coreLogout(); finish(); await assert.rejects(session, /signed out/); assert.ok(!h.store.has('axolotl-core-tokens'));
   const revoked = h.calls.filter(c => c.url.endsWith('/oauth/revoke/')).map(c => c.options.body.get('token'));
   assert.deepEqual(revoked, ['old-refresh', 'new-refresh']); assert.ok(!h.calls.some(c => c.url.endsWith('/session')));
+});
+
+test('a failed publishing session is reported instead of silently looking signed out', async () => {
+  const h = harness();
+  assert.equal(await h.api.coreSession(), false);
+  h.store.set('axolotl-core-tokens', JSON.stringify({ access_token: 'access', expires_at: Date.now() + 300000 }));
+  h.respond(async () => ({ ok: false, json: async () => ({ error: 'Your Core account does not have this newsroom permission.' }) }));
+  await assert.rejects(h.api.coreSession(), /Newsroom access check failed: Your Core account/);
+  assert.ok(h.store.has('axolotl-core-tokens'), 'A permission failure must not discard a valid identity token.');
+});
+
+test('Core callback denial is distinct from a token exchange rejection and never exposes provider descriptions', async () => {
+  for (const atCallback of [true, false]) {
+    const h = harness(); await h.api.beginCoreLogin();
+    const flow = JSON.parse(h.store.get('axolotl-core-flow')!);
+    h.location.search = `?state=${flow.state}&${atCallback ? 'error=access_denied&error_description=private-token-value' : 'code=private-code-value'}`;
+    h.respond(async () => ({ ok: false, json: async () => ({ error: 'invalid_grant', error_description: 'private-token-value' }) }));
+    await assert.rejects(h.api.completeCoreLogin(), (e: Error) => {
+      assert.match(e.message, atCallback ? /cancelled or denied/ : /could not exchange/);
+      assert.ok(!e.message.includes('private-')); return true;
+    });
+    assert.equal(h.calls.length, atCallback ? 0 : 1);
+    assert.ok(!h.store.has('axolotl-core-tokens'));
+  }
+});
+
+test('token endpoint network failures and non-JSON responses have actionable messages', async () => {
+  for (const kind of ['network', 'html']) {
+    const h = harness(); await h.api.beginCoreLogin();
+    const flow = JSON.parse(h.store.get('axolotl-core-flow')!);
+    h.location.search = `?state=${flow.state}&code=one-use-code`;
+    h.respond(async () => {
+      if (kind === 'network') throw new TypeError('Failed to fetch');
+      return { ok: false, json: async () => { throw new SyntaxError('Unexpected token'); } };
+    });
+    await assert.rejects(h.api.completeCoreLogin(), kind === 'network' ? /allowed browser origin/ : /proxy deployment/);
+    assert.ok(!h.store.has('axolotl-core-tokens'));
+  }
 });

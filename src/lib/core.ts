@@ -14,11 +14,31 @@ let sessionGeneration = 0;
 const config = () => { if (!coreConfig) throw new Error('Core is not configured.'); return coreConfig; };
 const b64 = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 function readTokens(): Tokens | undefined { try { return JSON.parse(sessionStorage.getItem(tokenKey) || 'null') || undefined; } catch { sessionStorage.removeItem(tokenKey); } }
+function authorizationError(code: unknown): string {
+  // Display only known error codes, never the provider's arbitrary description
+  // or callback URL, which can contain credentials.
+  const messages: Record<string, string> = {
+    access_denied: 'Core authorization was cancelled or denied.',
+    invalid_grant: 'Core could not exchange the sign-in code. Start sign-in again.',
+    invalid_client: 'Core does not recognize this newsroom’s browser client. Check its registration.',
+    unauthorized_client: 'Core has not enabled this newsroom’s browser client for sign-in.',
+    invalid_request: 'Core rejected the sign-in request. Check the browser client and callback configuration.',
+    invalid_scope: 'Core rejected the newsroom’s requested sign-in permissions.',
+    server_error: 'Core could not complete sign-in. Try again shortly.',
+    temporarily_unavailable: 'Core sign-in is temporarily unavailable. Try again shortly.',
+  };
+  return typeof code === 'string' && Object.hasOwn(messages, code) ? messages[code] : 'Core sign-in failed. Start sign-in again.';
+}
 async function exchange(fields: Record<string, string>, generation = sessionGeneration): Promise<Tokens> {
   const c = config();
-  const r = await fetch(`${c.issuer}/oauth/token/`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: c.browser_client_id, ...fields }), credentials: 'omit', redirect: 'error' });
-  const t = await r.json();
-  if (!r.ok || typeof t.access_token !== 'string' || t.token_type?.toLowerCase() !== 'bearer' || !Number.isFinite(t.expires_in)) throw new Error('Core sign-in expired or failed. Sign in again.');
+  let r: Response;
+  try {
+    r = await fetch(`${c.issuer}/oauth/token/`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: c.browser_client_id, ...fields }), credentials: 'omit', redirect: 'error' });
+  } catch { throw new Error('The browser could not reach Core’s token endpoint. Check the connection and Core’s allowed browser origin.'); }
+  let t;
+  try { t = await r.json(); } catch { throw new Error('Core’s token endpoint returned an unexpected response. Check the Core proxy deployment.'); }
+  if (!r.ok) throw new Error(authorizationError(t?.error));
+  if (!t || typeof t.access_token !== 'string' || t.token_type?.toLowerCase() !== 'bearer' || !Number.isFinite(t.expires_in)) throw new Error('Core’s token endpoint returned an invalid session.');
   // ID tokens are never used to authorize API requests. The backend checks the
   // opaque access token with live, service-bound Core introspection every time.
   const tokens = { access_token: t.access_token, refresh_token: t.refresh_token, expires_at: Date.now() + t.expires_in * 1000 };
@@ -45,7 +65,8 @@ export function completeCoreLogin(): Promise<void> {
     const flow = JSON.parse(stored);
     if (params.get('state') !== flow.state || Date.now() - flow.at > 600000 || flow.at > Date.now()) throw new Error('Sign-in state is invalid or expired. Start sign-in again.');
     if (params.has('iss') && params.get('iss') !== c.issuer) throw new Error('Unexpected sign-in issuer.');
-    if (params.has('error') || !params.get('code')) throw new Error('Core sign-in was declined.');
+    if (params.has('error')) throw new Error(authorizationError(params.get('error')));
+    if (!params.get('code')) throw new Error('Core did not return a sign-in code. Start sign-in again.');
     await exchange({ grant_type: 'authorization_code', code: params.get('code')!, redirect_uri: c.redirect_uri, code_verifier: flow.verifier });
     history.replaceState({}, '', '/studio');
   })(); return callback;
@@ -69,7 +90,11 @@ export async function coreRequest<T>(path: string, method = 'GET', body?: unknow
   if (!r.ok) throw new Error(data.error || 'The publishing service could not complete the request.');
   return data as T;
 }
-export async function coreSession(): Promise<boolean> { if (!readTokens()) return false; try { await coreRequest('/session'); return true; } catch { return false; } }
+export async function coreSession(): Promise<boolean> {
+  if (!readTokens()) return false;
+  try { await coreRequest('/session'); return true; }
+  catch (e) { throw new Error(`Newsroom access check failed: ${e instanceof Error ? e.message : 'The publishing service could not be reached.'}`); }
+}
 async function revokeToken(token: string) {
   const c = config();
   try { await fetch(`${c.issuer}/oauth/revoke/`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: c.browser_client_id, token }), credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(10000) }); } catch { /* Credentials are still cleared locally when Core is unreachable. */ }

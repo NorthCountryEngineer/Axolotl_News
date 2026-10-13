@@ -392,6 +392,28 @@ Cloudflare supports apex CNAME flattening on the existing zone. Keep validation 
 
 Use the initial DNS-only configuration throughout these tests. Any later Cloudflare proxy/caching change is a separate decision requiring review of OAuth redirects, cookies, cache rules, and certificate renewal.
 
+### Diagnose a return from Core without editor access
+
+Consent, token exchange, and newsroom permissions are separate steps. Clicking **Authorize** does not establish editor access until the browser exchanges the code and the API approves `/session` with `posts-write`. Axolotl keeps callback and access-check errors visible on `/studio`; it does not treat a failed permission check as an ordinary signed-out session.
+
+1. Start at `https://axolotl.news/studio` in one tab, using the apex domain.
+2. Open browser **Developer Tools → Network** and enable **Preserve log** before clicking **Sign in with NCE Core**.
+3. Complete Core login and click **Authorize**. Read the persistent message on Axolotl, and inspect the status of `/oauth/token/` and `/session` in Network. Share only HTTP statuses and the response's `error` field. Do not share a HAR, request headers/bodies, callback query values, codes, access tokens, or refresh tokens.
+4. Use the failing stage to choose the correction:
+
+| Observation | Check |
+| --- | --- |
+| Callback reports missing/invalid state | Start again in the same tab from the apex. The PKCE verifier is stored in that tab's session storage. |
+| Callback reports denial; no token request | Core denied the consent request or **Cancel** was submitted. Check the authorization response error before changing the API. |
+| Token request is blocked by CORS/network | Browser client's exact allowed origin must be `https://axolotl.news`; Core's proxy must preserve token endpoint CORS headers. |
+| Token request returns `invalid_grant` | Start a fresh flow; check code expiry, the exact registered redirect URI, and PKCE. A code cannot be reused. |
+| Token request succeeds; `/session` returns 403 | Grant this membership a role with Axolotl `posts-write`. Grant `posts-publish` if publishing is intended. Include the production environment boundary under **Explicit access-tag grants**. |
+| Token request succeeds; `/session` returns 401 | Check issuer, organization, service/audience, current membership, and the browser/resource client's shared deployment. |
+| `/session` returns 503 | Check Core introspection connectivity and the confidential resource client. |
+| `/session` returns 500 | Inspect the API's server error, including access to `/axolotl-news/core-resource-client`; keep the parameter value private. |
+
+The API's rejection must be corrected at its source; disabling introspection, widening CORS, or accepting ID tokens would not repair this flow. These browser checks contact the deployed applications and can incur serving charges. Preparing a local frontend fix does not deploy it; a manually started Amplify build can also be billed.
+
 ## 11. Operate, back up, and shut down deliberately
 
 Keep Core keys and encrypted database backups together in a secure recovery plan: Core's Django secret also protects stored integration bundles. Rotating it is a migration, not a casual environment edit. Do not copy the RSA private key or secret files into a frontend build. Secret injection into an ECS task happens at task startup; update and restart tasks deliberately when changing an origin credential or database credential. Coordinate the proxy-origin value with the Core runtime value. [ECS secret injection and rotation behavior](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-secrets-manager.html).
