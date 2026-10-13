@@ -46,7 +46,7 @@ Local drafts use localStorage and files use IndexedDB. Clearing browser data rem
 - Core Authorization Code + PKCE sign-in. Every protected API operation checks the opaque access token against current Core authorization; `posts-write` and `posts-publish` are separate grants. Already issued S3 upload/download URLs remain valid for their short expiry window.
 - Explicit Save; no autosave. Keep the tab open and retry failed saves. No analytics, mailing list, public comments or paid editor service is included.
 
-The exact extracted Canva story text is included, with new vector illustrations. Original slide artwork still needs a signed-in free Canva export and upload: [Canva instructions](docs/CANVA.md). Publishing a **Presentation** with PNG slides or a PDF replaces the text edition on the homepage.
+**The Story** plays the original eight-page Canva presentation as an unchanged 1080p MP4, including its audio and timing. The exact extracted text remains available as a reading transcript. See [Canva export instructions](docs/CANVA.md) to refresh the video.
 
 ## Verification
 

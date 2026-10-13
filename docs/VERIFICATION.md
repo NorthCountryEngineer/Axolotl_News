@@ -36,7 +36,7 @@ The desktop and narrow-screen layouts were visually inspected; the narrow-screen
 
 ## Canva content
 
-The Canva connector located the eight-page design `DAHXRf8lZik`, titled “Your paragraph text,” whose story title is “The Axolotl.” It returned exact text for pages 1–7 and empty text for page 8. The browser was not logged in to Canva, and the exact read-only thumbnail URLs returned HTTP 403. Original slide artwork has not been copied into the application. The app includes a clearly labeled text edition with new vector illustrations and a link to the original. Use [CANVA.md](CANVA.md) to upload the original exported slides/PDF.
+The original eight-page Canva design `DAHXRf8lZik` was exported through Canva’s signed-in browser download interface on October 13, 2026, using MP4 Video, 1920 × 1080, all pages, and a single file. The 69.333-second export contains one audio track. The repository MP4 matches the downloaded file byte-for-byte (SHA-256 recorded in `src/data/presentation.json`). The homepage plays this original export instead of the earlier text-only carousel. A poster frame was extracted locally without changing the MP4. No design content, page timing, or sharing permissions were changed; no purchase, subscription, AWS deployment, or cloud build was started for this change.
 
 ## Environment and scope
 

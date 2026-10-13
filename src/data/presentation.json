@@ -4,7 +4,7 @@
   "displayTitle": "The Axolotl",
   "viewUrl": "https://www.canva.com/d/FzMloLG4S7ylOK9",
   "pageCount": 8,
-  "exportPending": true,
+  "exportPending": false,
   "source": "Canva rich text",
   "importedAt": "2026-10-11",
   "slides": [
@@ -41,7 +41,11 @@
       "text": ""
     }
   ],
-  "previewSlides": [],
-  "previewsImported": false,
-  "previewImportNote": "Canva returned thumbnail metadata, but an ordinary GET of each exact thumbnail URL returned HTTP 403 Forbidden. No original artwork files were acquired."
+  "exportedAt": "2026-10-13",
+  "videoPath": "/presentation/the-axolotl.mp4",
+  "posterPath": "/presentation/the-axolotl.jpg",
+  "videoWidth": 1920,
+  "videoHeight": 1080,
+  "videoDurationSeconds": 69.333,
+  "videoSha256": "fcf67688cf69ead0f499c1063c2172206d023548fa26d1b9710ffb972a8cff78"
 }
