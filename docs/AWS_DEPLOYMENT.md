@@ -405,7 +405,7 @@ Consent, token exchange, and newsroom permissions are separate steps. Clicking *
 | --- | --- |
 | Callback reports missing/invalid state | Start again in the same tab from the apex. The PKCE verifier is stored in that tab's session storage. |
 | Callback reports denial; no token request | Core denied the consent request or **Cancel** was submitted. Check the authorization response error before changing the API. |
-| Publishing API preflight returns 404 | Inspect the OPTIONS request's `Origin`, `Access-Control-Request-Method`, and `Access-Control-Request-Headers`. Expect `https://axolotl.news`, an allowed method, and allowed headers including `authorization`. Compare the deployed HTTP API's CORS policy and `$default` stage; do not assume a generic browser CORS error means the saved policy is missing. |
+| Publishing API preflight returns 404 | Expect origin `https://axolotl.news`, an allowed method, and allowed headers including `authorization`. If the response already has the correct CORS headers but says `API route not found.`, the `$default` integration forwarded OPTIONS to an older Lambda handler. Package and deploy the current API handler, which returns an empty 204 before accessing identity or data. Keep API Gateway's exact-origin CORS policy. |
 | Token request is blocked by CORS/network | Browser client's exact allowed origin must be `https://axolotl.news`; Core's proxy must preserve token endpoint CORS headers. |
 | Token request returns `invalid_grant` | Start a fresh flow; check code expiry, the exact registered redirect URI, and PKCE. A code cannot be reused. |
 | Token request succeeds; `/session` returns 403 | Grant this membership a role with Axolotl `posts-write`. Grant `posts-publish` if publishing is intended. Include the production environment boundary under **Explicit access-tag grants**. |
@@ -414,6 +414,8 @@ Consent, token exchange, and newsroom permissions are separate steps. Clicking *
 | `/session` returns 500 | Check API Gateway's Lambda integration and invocation permission. |
 
 The API's rejection must be corrected at its source; disabling introspection, widening CORS, or accepting ID tokens would not repair this flow. These browser checks contact the deployed applications and can incur serving charges. Preparing a local frontend fix does not deploy it; a manually started Amplify build can also be billed.
+
+Production verification on October 13, 2026 confirmed this forwarded-OPTIONS failure. Updating the existing Lambda code corrected the preflight from 404 to 204. A fresh Axolotl sign-in through the existing Core browser session, consent, callback, protected newsroom access, and page reload succeeded in Firefox. No post was saved or published during verification, and no Amplify build was started. The fix is deployed directly to Lambda; for the next CloudFormation release, run `python3 scripts/package-api.py` from the current checkout and use a new release key. The older S3 release artifact does not contain this fix.
 
 ## 11. Operate, back up, and shut down deliberately
 

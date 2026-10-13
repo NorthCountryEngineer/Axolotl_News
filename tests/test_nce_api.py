@@ -37,6 +37,23 @@ class SecurityTests(unittest.TestCase):
     def error(self, status, event):
         r = api.handler(event, None); self.assertEqual(r['statusCode'],status,r); return r
     def test_missing_bearer_is_denied(self): self.error(401,self.event(token=False)); self.opener.open.assert_not_called()
+    def test_forwarded_browser_preflights_succeed_without_identity_or_data_access(self):
+        for path, method in [('/session', 'GET'), ('/posts', 'GET'), ('/media/upload', 'POST'),
+                             ('/posts/' + PID, 'PUT'), ('/published/' + PID, 'DELETE')]:
+            with self.subTest(path=path):
+                event = self.event(path, 'OPTIONS', token=False)
+                event['headers'] = {'origin': 'https://axolotl.news',
+                    'access-control-request-method': method,
+                    'access-control-request-headers': 'authorization,content-type'}
+                result = api.handler(event, None)
+                self.assertEqual(result['statusCode'], 204)
+                self.assertEqual(result['body'], '')
+                self.assertNotIn('Access-Control-Allow-Origin', result['headers'])
+        api.clients.assert_not_called()
+        api.credentials.assert_not_called()
+        self.opener.open.assert_not_called()
+        self.error(401, self.event('/session', token=False))
+        self.error(401, self.event('/media/upload', 'POST', {}, token=False))
     def test_correct_session_uses_live_introspection(self):
         self.assertEqual(api.handler(self.event(),None)['statusCode'],200)
         self.claims['permissions'] = []

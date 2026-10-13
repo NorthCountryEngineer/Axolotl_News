@@ -227,6 +227,12 @@ def dispatch(event):
 
 
 def handler(event, context):
+    # The HTTP API's $default route can forward browser preflights here.
+    # API Gateway owns the exact-origin CORS policy and supplies its headers.
+    # A preflight checks request capabilities; it must not introspect a token,
+    # initialize SDK clients, or perform the requested data operation.
+    if event.get('requestContext', {}).get('http', {}).get('method') == 'OPTIONS':
+        return {'statusCode': 204, 'headers': {'Cache-Control': 'no-store'}, 'body': ''}
     try:
         result = dispatch(event); status = 200
     except APIError as e:
