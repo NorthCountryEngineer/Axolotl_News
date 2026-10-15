@@ -2,6 +2,10 @@
 
 A family axolotl publication with a visual editor, newsletters, photos, video, PDFs and the young creator's Canva story. Public readers need no account. Editors sign in through **NCE Core**; Core controls current editing and publishing permissions.
 
+Authorized publishers can turn on **Admin actions** to reveal each creation's
+**Update**, **Duplicate**, and **Delete** menu. See [content administration](docs/CONTENT_ADMIN.md)
+for local validation and the backend-first release steps.
+
 ## Deploy with NCE Core
 
 Follow the numbered [AWS deployment guide](docs/AWS_DEPLOYMENT.md) for **both applications**, their bootstrap and permissions, and Cloudflare DNS. It includes the exact commands and settings; no AWS resources have been deployed by this project.

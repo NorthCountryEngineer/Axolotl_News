@@ -16,6 +16,7 @@ export type StoryDocument = { version: 1; theme: 'cream' | 'pink' | 'green'; lay
 export type Post = {
   id: string; title: string; slug: string; excerpt: string; category: string;
   document: string; status: string; coverKey?: string; publishedAt?: string; createdAt?: string; updatedAt?: string;
+  adminState?: 'copying' | 'deleting'; duplicateSourceId?: string;
 };
 export const categories = ['Stories', 'Fun facts', 'Photos', 'Videos', 'Newsletters', 'Presentation'];
 export const emptyDocument = (): StoryDocument => ({version:1, theme:'cream', layout:'story', blocks:[{id:crypto.randomUUID(),type:'text',nodes:[{tag:'p',children:[{tag:'#text',text:'Once upon an axolotl…'}]}]}]});

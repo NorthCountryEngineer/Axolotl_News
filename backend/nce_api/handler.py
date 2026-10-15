@@ -2,6 +2,8 @@
 No permission cache: each protected request uses current Core introspection.
 """
 import base64
+from copy import deepcopy
+import hashlib
 import json
 import os
 import re
@@ -96,7 +98,17 @@ def get_post(pid, published=False):
 
 
 def output(item):
-    return {k: v for k, v in item.items() if k in {'id', 'title', 'slug', 'excerpt', 'category', 'document', 'status', 'coverKey', 'publishedAt', 'createdAt', 'updatedAt'}}
+    result = {k: v for k, v in item.items() if k in {'id', 'title', 'slug', 'excerpt', 'category', 'document', 'status', 'coverKey', 'publishedAt', 'createdAt', 'updatedAt'}}
+    if item.get('contentDeleting'):
+        result['adminState'] = 'deleting'
+        # An upload can exist before its first saved draft. Keep interrupted removal reachable.
+        if 'title' not in result:
+            result.update(title='Content removal pending', slug='removing-' + item['id'], excerpt='', category='Stories', status='Draft',
+                document=json.dumps({'version': 1, 'theme': 'cream', 'layout': 'story', 'blocks': [{'id': 'removal', 'type': 'text', 'nodes': []}]}))
+    elif item.get('duplicateState'):
+        result['adminState'] = 'copying'
+        if isinstance(item.get('duplicateSource'), str) and re.fullmatch(UUID, item['duplicateSource']): result['duplicateSourceId'] = item['duplicateSource']
+    return result
 
 
 def validate_post(body, pid, published=False):
@@ -132,22 +144,171 @@ def transact(items):
         raise
 
 
+def changing(item):
+    return item and (any(item.get(field) for field in ('contentDeleting', 'contentDeleted', 'duplicateState')) or
+        item.get('mediaCleanup') and item.get('mediaCleanupExpires', int(time.time()) + 1) >= int(time.time()))
+
+
+def release_lock(pid, lock):
+    try:
+        table().update_item(Key={'id': pid}, UpdateExpression='REMOVE mediaCleanup, mediaCleanupExpires',
+            ConditionExpression='mediaCleanup = :lock', ExpressionAttributeValues={':lock': lock})
+    except Exception as error:
+        if getattr(error, 'response', {}).get('Error', {}).get('Code') != 'ConditionalCheckFailedException': raise
+
+
+def snapshot_condition(item, *, unlocked=False):
+    """A copy may finish only against the exact content reviewed at its start."""
+    names, values, checks = {}, {':org': os.environ['CORE_ORGANIZATION_ID']}, ['organization_id = :org']
+    for index, field in enumerate(('title', 'slug', 'excerpt', 'category', 'document', 'coverKey', 'updatedAt')):
+        name, value = f'#s{index}', f':s{index}'
+        names[name] = field
+        if field in item:
+            values[value] = item[field]; checks.append(f'{name} = {value}')
+        else: checks.append(f'attribute_not_exists({name})')
+    if unlocked:
+        checks.extend(['(attribute_not_exists(mediaCleanup) OR mediaCleanupExpires < :lockNow)', 'attribute_not_exists(contentDeleting)', 'attribute_not_exists(contentDeleted)', 'attribute_not_exists(duplicateState)'])
+        values[':lockNow'] = int(time.time())
+    return {'ConditionExpression': ' AND '.join(checks), 'ExpressionAttributeNames': names, 'ExpressionAttributeValues': values}
+
+
+def fingerprint(item):
+    return hashlib.sha256(json.dumps(output(item), sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def duplicate(pid, target):
+    if target == pid: raise APIError(400, 'A duplicate needs a new story identifier.')
+    existing, public_target = get_post(target), get_post(target, True)
+    if public_target or existing and existing.get('duplicateSource') != pid:
+        raise APIError(409, 'That story identifier is already in use. Start a new duplicate.')
+    if existing and existing.get('duplicateComplete'):
+        if changing(existing): raise APIError(409, 'This copy is being changed or removed.')
+        return output(existing)
+    source = get_post(pid)
+    published = source is None
+    if published: source = get_post(pid, True)
+    if not source: raise APIError(404, 'Story not found.')
+    if changing(source): raise APIError(409, 'This story is being changed or removed. Reload and retry.')
+    if existing and existing.get('duplicateFingerprint') != fingerprint(source):
+        raise APIError(409, 'The source story changed during copying. Delete the incomplete copy before starting again.')
+    validate_post(source, pid, published)
+    document = json.loads(source['document'])
+    key_map = {}
+    for block in document['blocks']:
+        block['id'] = str(uuid.uuid5(uuid.UUID(target), 'block:' + block['id']))
+        if block.get('key'):
+            original = block['key']; extension = media_key(original)[5]
+            key_map[original] = f'drafts/{target}/{uuid.uuid5(uuid.UUID(target), "media:" + original)}.{extension}'
+            block['key'] = key_map[original]
+    now, lock = datetime.now(timezone.utc).isoformat(), str(uuid.uuid4())
+    body = {key: source[key] for key in ('excerpt', 'category')}
+    body.update(id=target, title=source['title'][:113] + ' (copy)', slug=source['slug'][:86].rstrip('-') + '-copy-' + target[:8],
+        document=json.dumps(document), status='Draft')
+    if source.get('coverKey'): body['coverKey'] = key_map[source['coverKey']]
+    clone, _ = validate_post(body, target)
+    clone['createdAt'] = existing.get('createdAt', now) if existing else now
+    pending = {**clone, 'duplicateSource': pid, 'duplicateFingerprint': fingerprint(source), 'duplicateState': 'copying',
+        'mediaCleanup': lock, 'mediaCleanupExpires': int(time.time()) + 90,
+        'duplicateEtags': deepcopy(existing.get('duplicateEtags', {})) if existing else {}}
+    source_condition = snapshot_condition(source, unlocked=not published)
+    source_operation = {'ConditionCheck': {'TableName': os.environ['PUBLIC_TABLE'], 'Key': {'id': pid}, **source_condition}} if published else {
+        'Update': {'TableName': os.environ['PRIVATE_TABLE'], 'Key': {'id': pid}, **source_condition,
+            'UpdateExpression': 'SET mediaCleanup = :sourceLock, mediaCleanupExpires = :sourceUntil'}}
+    if not published: source_operation['Update']['ExpressionAttributeValues'].update({':sourceLock': lock, ':sourceUntil': int(time.time()) + 90})
+    target_condition = {'ConditionExpression': 'attribute_not_exists(id)'} if not existing else {
+        'ConditionExpression': 'duplicateSource = :source AND duplicateFingerprint = :fingerprint AND attribute_not_exists(contentDeleting) AND attribute_not_exists(contentDeleted) AND (attribute_not_exists(mediaCleanup) OR mediaCleanupExpires < :now)',
+        'ExpressionAttributeValues': {':source': pid, ':fingerprint': fingerprint(source), ':now': int(time.time())}}
+    operations = [source_operation, {'Put': {'TableName': os.environ['PRIVATE_TABLE'], 'Item': pending, **target_condition}},
+        {'ConditionCheck': {'TableName': os.environ['PUBLIC_TABLE'], 'Key': {'id': target}, 'ConditionExpression': 'attribute_not_exists(id)'}}]
+    if published:
+        operations.append({'ConditionCheck': {'TableName': os.environ['PRIVATE_TABLE'], 'Key': {'id': pid}, 'ConditionExpression': 'attribute_not_exists(id)'}})
+    transact(operations)
+    try:
+        for original, destination in key_map.items():
+            etag = pending['duplicateEtags'].get(original)
+            if not etag:
+                metadata = clients()[1].head_object(Bucket=os.environ['MEDIA_BUCKET'], Key=original)
+                etag = metadata.get('ETag')
+                if not isinstance(etag, str) or not etag: raise APIError(503, 'A story file could not be verified. Retry this copy.')
+                pending['duplicateEtags'][original] = etag
+                table().update_item(Key={'id': target}, UpdateExpression='SET duplicateEtags = :etags',
+                    ConditionExpression='mediaCleanup = :lock AND attribute_not_exists(contentDeleting)',
+                    ExpressionAttributeValues={':etags': pending['duplicateEtags'], ':lock': lock})
+            clients()[1].copy_object(Bucket=os.environ['MEDIA_BUCKET'], Key=destination,
+                CopySource={'Bucket': os.environ['MEDIA_BUCKET'], 'Key': original}, CopySourceIfMatch=etag)
+        complete = {**clone, 'duplicateSource': pid, 'duplicateComplete': True}
+        check = snapshot_condition(source)
+        if not published:
+            check['ConditionExpression'] += ' AND mediaCleanup = :lock'
+            check['ExpressionAttributeValues'][':lock'] = lock
+        transact([
+            {'ConditionCheck': {'TableName': os.environ['PUBLIC_TABLE' if published else 'PRIVATE_TABLE'], 'Key': {'id': pid}, **check}},
+            {'Put': {'TableName': os.environ['PRIVATE_TABLE'], 'Item': complete, 'ConditionExpression': 'mediaCleanup = :lock AND attribute_not_exists(contentDeleting)', 'ExpressionAttributeValues': {':lock': lock}}},
+        ])
+        return output(complete)
+    finally:
+        if not published: release_lock(pid, lock)
+        release_lock(target, lock)
+
+
+def delete_content(pid):
+    """Unpublish and quarantine first; a failed sweep remains safe to retry."""
+    private, public = get_post(pid), get_post(pid, True)
+    if private and private.get('mediaCleanup') and private.get('mediaCleanupExpires', 0) >= int(time.time()):
+        raise APIError(409, 'This story is being changed. Retry its removal shortly.')
+    lock = str(uuid.uuid4())
+    private_update = {'TableName': os.environ['PRIVATE_TABLE'], 'Key': {'id': pid},
+        'UpdateExpression': 'SET organization_id = :org, contentDeleting = :yes, mediaCleanup = :lock, mediaCleanupExpires = :until',
+        'ConditionExpression': '(attribute_not_exists(id) OR organization_id = :org) AND (attribute_not_exists(mediaCleanup) OR mediaCleanupExpires < :now)',
+        'ExpressionAttributeValues': {':org': os.environ['CORE_ORGANIZATION_ID'], ':yes': True, ':lock': lock, ':until': int(time.time()) + 90, ':now': int(time.time())}}
+    if private is None and public:
+        private_update['ExpressionAttributeNames'] = {}
+        for index, (field, value) in enumerate(output(public).items()):
+            if field == 'id': continue
+            name, parameter = f'#keep{index}', f':keep{index}'
+            private_update['ExpressionAttributeNames'][name] = field
+            private_update['ExpressionAttributeValues'][parameter] = value
+            private_update['UpdateExpression'] += f', {name} = {parameter}'
+    transact([
+        {'Delete': {'TableName': os.environ['PUBLIC_TABLE'], 'Key': {'id': pid},
+            'ConditionExpression': 'attribute_not_exists(id) OR organization_id = :org', 'ExpressionAttributeValues': {':org': os.environ['CORE_ORGANIZATION_ID']}}},
+        {'Update': private_update},
+    ])
+    try:
+        remove_media(pid, include_drafts=True)
+        # Retain only an internal deletion marker: late saves cannot recreate a removed ID.
+        tombstone = {'id': pid, 'organization_id': os.environ['CORE_ORGANIZATION_ID'], 'contentDeleted': True}
+        table().put_item(Item=tombstone, ConditionExpression='mediaCleanup = :lock AND contentDeleting = :yes',
+            ExpressionAttributeValues={':lock': lock, ':yes': True})
+    finally:
+        release_lock(pid, lock)
+    return {'removed': True}
+
+
+def remove_media(pid, include_drafts=False):
+    for prefix in ([f'published/{pid}/', f'drafts/{pid}/'] if include_drafts else [f'published/{pid}/']):
+        for page in clients()[1].get_paginator('list_objects_v2').paginate(Bucket=os.environ['MEDIA_BUCKET'], Prefix=prefix):
+            keys = [{'Key': row['Key']} for row in page.get('Contents', []) if row.get('Key', '').startswith(prefix)]
+            if keys:
+                result = clients()[1].delete_objects(Bucket=os.environ['MEDIA_BUCKET'], Delete={'Objects': keys})
+                if result.get('Errors'): raise APIError(503, 'Some files could not be removed. Retry cleanup.')
+
+
 def cleanup(pid, delete_draft=False):
-    if not get_post(pid): raise APIError(404, 'Draft not found.')
+    if delete_draft:
+        if get_post(pid, True): raise APIError(409, 'Unpublish the story before deleting its draft.')
+        delete_content(pid)
+        return
+    previous = get_post(pid)
+    if not previous: raise APIError(404, 'Draft not found.')
+    if previous.get('contentDeleting') or previous.get('contentDeleted') or previous.get('duplicateState'): raise APIError(409, 'Finish removing or copying this story before cleaning its media.')
     lock = str(uuid.uuid4())
     transact([
         {'ConditionCheck': {'TableName': os.environ['PUBLIC_TABLE'], 'Key': {'id': pid}, 'ConditionExpression': 'attribute_not_exists(id)'}},
         {'Update': {'TableName': os.environ['PRIVATE_TABLE'], 'Key': {'id': pid}, 'UpdateExpression': 'SET mediaCleanup = :lock, mediaCleanupExpires = :until', 'ConditionExpression': 'attribute_exists(id) AND (attribute_not_exists(mediaCleanup) OR mediaCleanupExpires < :now)', 'ExpressionAttributeValues': {':lock': lock, ':until': int(time.time()) + 90, ':now': int(time.time())}}},
     ])
     try:
-        for prefix in ([f'published/{pid}/', f'drafts/{pid}/'] if delete_draft else [f'published/{pid}/']):
-            for page in clients()[1].get_paginator('list_objects_v2').paginate(Bucket=os.environ['MEDIA_BUCKET'], Prefix=prefix):
-                keys = [{'Key': row['Key']} for row in page.get('Contents', [])]
-                if keys:
-                    result = clients()[1].delete_objects(Bucket=os.environ['MEDIA_BUCKET'], Delete={'Objects': keys})
-                    if result.get('Errors'): raise APIError(503, 'Some files could not be removed. Retry cleanup.')
-        if delete_draft:
-            table().delete_item(Key={'id': pid}, ConditionExpression='mediaCleanup = :lock', ExpressionAttributeValues={':lock': lock})
+        remove_media(pid)
     finally:
         if get_post(pid): table().update_item(Key={'id': pid}, UpdateExpression='REMOVE mediaCleanup, mediaCleanupExpires', ConditionExpression='mediaCleanup = :lock', ExpressionAttributeValues={':lock': lock})
 
@@ -169,12 +330,19 @@ def dispatch(event):
                 pid = json.loads(base64.urlsafe_b64decode(query['cursor']))['id']; options['ExclusiveStartKey'] = {'id': post_id(pid)}
             except (ValueError, KeyError, TypeError): raise APIError(400, 'Invalid archive cursor.')
         r = table(published).scan(**options)
-        result = {'posts': [output(item) for item in r.get('Items', []) if item.get('organization_id') == os.environ['CORE_ORGANIZATION_ID']]}
+        result = {'posts': [output(item) for item in r.get('Items', []) if item.get('organization_id') == os.environ['CORE_ORGANIZATION_ID'] and not item.get('contentDeleted')]}
         if r.get('LastEvaluatedKey'): result['cursor'] = base64.urlsafe_b64encode(json.dumps(r['LastEvaluatedKey']).encode()).decode()
         return result
     if method == 'GET' and path == '/media/read':
         key = query.get('key', ''); m = media_key(key)
-        if m[1] == 'drafts': authorize(event, 'posts-write')
+        if m[1] == 'drafts':
+            authorize(event, 'posts-write')
+            if changing(get_post(m[2])): raise APIError(409, 'Story media is being changed or removed.')
+        else:
+            live = get_post(m[2], True)
+            if not live: raise APIError(404, 'Published story not found.')
+            _, keys = validate_post(live, m[2], True)
+            if key not in keys: raise APIError(404, 'Published story file not found.')
         return {'url': clients()[1].generate_presigned_url('get_object', Params={'Bucket': os.environ['MEDIA_BUCKET'], 'Key': key}, ExpiresIn=300)}
     raw = event.get('body') or '{}'
     if event.get('isBase64Encoded'): raw = base64.b64decode(raw).decode()
@@ -186,14 +354,14 @@ def dispatch(event):
         authorize(event, 'posts-write'); m = media_key(body.get('key')); mime, size = body.get('mime'), body.get('size')
         maximum = 50 * 1024 * 1024 if mime in {'video/mp4', 'video/webm'} else 10 * 1024 * 1024
         existing = get_post(m[2])
-        if existing and existing.get('mediaCleanup'): raise APIError(409, 'Story media is being cleaned up. Retry after cleanup finishes.')
+        if changing(existing): raise APIError(409, 'Story media is being changed or removed. Retry after cleanup finishes.')
         if m[1] != 'drafts' or MIMES.get(mime) != m[5] or type(size) is not int or not 1 <= size <= maximum: raise APIError(400, 'Invalid upload type, name or size.')
         disposition = 'attachment' if mime == 'application/pdf' else 'inline'
         return clients()[1].generate_presigned_post(os.environ['MEDIA_BUCKET'], body['key'], Fields={'Content-Type': mime, 'Content-Disposition': disposition}, Conditions=[{'Content-Type': mime}, {'Content-Disposition': disposition}, ['content-length-range', size, size]], ExpiresIn=60)
     if path == '/media/copy' and method == 'POST':
         authorize(event, 'posts-write', 'posts-publish'); source, target = media_key(body.get('source')), media_key(body.get('key'))
         if source[1] != 'drafts' or target[1] != 'published' or source[2] != target[2] or (source[4], source[5]) != (target[4], target[5]) or not get_post(source[2]): raise APIError(400, 'Copy must publish media from its own saved draft.')
-        if get_post(source[2]).get('mediaCleanup'): raise APIError(409, 'Story media is being cleaned up. Retry after cleanup finishes.')
+        if changing(get_post(source[2])): raise APIError(409, 'Story media is being changed or removed. Retry after cleanup finishes.')
         try:
             clients()[1].head_object(Bucket=os.environ['MEDIA_BUCKET'], Key=body['key'])
         except Exception as error:
@@ -204,23 +372,38 @@ def dispatch(event):
         return {'copied': True}
     if path.startswith('/media/cleanup/') and method == 'DELETE':
         authorize(event, 'posts-write', 'posts-publish'); cleanup(post_id(path.removeprefix('/media/cleanup/'))); return {'removed': True}
+    admin_match = re.fullmatch(r'/posts/([^/]+)/(duplicate|content)', path)
+    if admin_match and ((admin_match[2] == 'duplicate' and method == 'POST') or (admin_match[2] == 'content' and method == 'DELETE')):
+        authorize(event, 'posts-write', 'posts-publish')
+        pid = post_id(admin_match[1])
+        if admin_match[2] == 'duplicate':
+            if set(body) != {'id'}: raise APIError(400, 'Supply only a new story identifier.')
+            return duplicate(pid, post_id(body['id']))
+        return delete_content(pid)
     match = re.fullmatch(r'/((?:posts)|(?:published))/([^/]+)', path)
     if match:
         published, pid = match[1] == 'published', post_id(match[2])
         authorize(event, 'posts-write', *(['posts-publish'] if published or method == 'DELETE' else []))
         if method == 'PUT':
             item, keys = validate_post(body, pid, published); previous = get_post(pid, published); item['createdAt'] = previous.get('createdAt', item['updatedAt']) if previous else item['updatedAt']
+            if changing(get_post(pid)): raise APIError(409, 'This story is being changed or removed. Reload and retry.')
             if published:
                 for key in keys: clients()[1].head_object(Bucket=os.environ['MEDIA_BUCKET'], Key=key)
                 transact([
-                    {'Update': {'TableName': os.environ['PRIVATE_TABLE'], 'Key': {'id': pid}, 'UpdateExpression': 'SET updatedAt = :now', 'ConditionExpression': 'attribute_exists(id) AND attribute_not_exists(mediaCleanup)', 'ExpressionAttributeValues': {':now': item['updatedAt']}}},
+                    {'Update': {'TableName': os.environ['PRIVATE_TABLE'], 'Key': {'id': pid}, 'UpdateExpression': 'SET updatedAt = :now', 'ConditionExpression': 'attribute_exists(id) AND (attribute_not_exists(mediaCleanup) OR mediaCleanupExpires < :epoch) AND attribute_not_exists(contentDeleting) AND attribute_not_exists(contentDeleted) AND attribute_not_exists(duplicateState)', 'ExpressionAttributeValues': {':now': item['updatedAt'], ':epoch': int(time.time())}}},
                     {'Put': {'TableName': os.environ['PUBLIC_TABLE'], 'Item': item}},
                 ])
             else:
-                table().put_item(Item=item, ConditionExpression='attribute_not_exists(mediaCleanup)')
+                # Preserve the server's copy receipt through later edits so a lost
+                # duplicate response can still resolve to the same target draft.
+                if previous and previous.get('duplicateComplete') is True and previous.get('duplicateSource'):
+                    item.update(duplicateSource=previous['duplicateSource'], duplicateComplete=True)
+                table().put_item(Item=item, ConditionExpression='(attribute_not_exists(mediaCleanup) OR mediaCleanupExpires < :epoch) AND attribute_not_exists(contentDeleting) AND attribute_not_exists(contentDeleted) AND attribute_not_exists(duplicateState)', ExpressionAttributeValues={':epoch': int(time.time())})
             return output(item)
         if method == 'DELETE':
-            if published: table(True).delete_item(Key={'id': pid})
+            if published:
+                get_post(pid, True)
+                table(True).delete_item(Key={'id': pid})
             else: cleanup(pid, delete_draft=True)
             return {'removed': True}
     raise APIError(404, 'API route not found.')

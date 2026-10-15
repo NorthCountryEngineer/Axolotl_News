@@ -5,15 +5,15 @@ import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
 import ts from 'typescript';
 
-function harness() {
-  const store = new Map<string, string>(), calls: { url: string; options: any }[] = [], redirects: string[] = [];
+function harness(initialStore?: Map<string, string>) {
+  const store = initialStore || new Map<string, string>(), calls: { url: string; options: any }[] = [], redirects: string[] = [];
   const config = { issuer: 'https://core.example.com', browser_client_id: 'public-client', redirect_uri: 'https://axolotl.news/oauth/callback', api_url: 'https://api.example.com', organization_id: 'org', service_id: 'service' };
   const location = { search: '', assign: (url: string) => redirects.push(url) };
   let response = async (url: string, options: any) => ({ ok: true, json: async () => url.endsWith('/oauth/token/') ? { access_token: 'opaque-access', token_type: 'Bearer', expires_in: 300, refresh_token: 'rotated-refresh', id_token: 'discard-this-id-token' } : { permissions: ['posts-write'] } });
   const source = readFileSync(new URL('../src/lib/core.ts', import.meta.url), 'utf8').replace("import.meta.env.VITE_APP_MODE", "'nce'").replace("import.meta.glob('../../nce-config.json', { eager: true, import: 'default' })", JSON.stringify({ file: config }));
   const js = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const exports: any = {};
-  const context = vm.createContext({ exports, require: () => ({}), crypto: webcrypto, AbortSignal, TextEncoder, Uint8Array, URL, URLSearchParams, btoa, Date, JSON, location, history: { replaceState: (_a: any, _b: any, path: string) => redirects.push(path) }, sessionStorage: { getItem: (k: string) => store.get(k) || null, setItem: (k: string, v: string) => store.set(k, v), removeItem: (k: string) => store.delete(k) }, fetch: async (url: string, options: any) => { calls.push({ url, options }); return response(url, options); } });
+  const context = vm.createContext({ exports, require: () => ({}), crypto: webcrypto, AbortSignal, TextEncoder, Uint8Array, URL, URLSearchParams, btoa, Date, JSON, Error, location, history: { replaceState: (_a: any, _b: any, path: string) => redirects.push(path) }, sessionStorage: { get length() { return store.size; }, key: (index: number) => [...store.keys()][index] || null, getItem: (k: string) => store.get(k) || null, setItem: (k: string, v: string) => store.set(k, v), removeItem: (k: string) => store.delete(k) }, fetch: async (url: string, options: any) => { calls.push({ url, options }); return response(url, options); } });
   vm.runInContext(js, context);
   return { api: exports, store, calls, redirects, location, config, respond: (r: typeof response) => { response = r; } };
 }
@@ -85,6 +85,55 @@ test('a failed publishing session is reported instead of silently looking signed
   h.respond(async () => ({ ok: false, json: async () => ({ error: 'Your Core account does not have this newsroom permission.' }) }));
   await assert.rejects(h.api.coreSession(), /Newsroom access check failed: Your Core account/);
   assert.ok(h.store.has('axolotl-core-tokens'), 'A permission failure must not discard a valid identity token.');
+});
+
+test('admin access requires live write and publish permissions, while an editor only needs write', async () => {
+  const h = harness();
+  assert.equal(await h.api.coreAdminSession(), false);
+  h.store.set('axolotl-core-tokens', JSON.stringify({ access_token: 'access', expires_at: Date.now() + 300000 }));
+  for (const permissions of [[], ['posts-write'], ['posts-publish'], ['posts-write', 'posts-publish']]) {
+    h.respond(async () => ({ ok: true, json: async () => ({ permissions }) }));
+    assert.equal(await h.api.coreSession(), permissions.includes('posts-write'));
+    assert.equal(await h.api.coreAdminSession(), permissions.includes('posts-write') && permissions.includes('posts-publish'));
+  }
+  h.respond(async () => ({ ok: false, json: async () => ({ error: 'Permission was revoked.' }) }));
+  await assert.rejects(h.api.coreAdminSession(), /admin check failed: Permission was revoked/);
+  assert.equal(h.calls.filter(call => call.url.endsWith('/session')).length, 9);
+});
+
+test('duplicate retries reuse the same target after a lost response and deletion calls the complete-content endpoint', async () => {
+  const h = harness();
+  h.store.set('axolotl-core-tokens', JSON.stringify({ access_token: 'access', expires_at: Date.now() + 300000 }));
+  let lost = true;
+  h.respond(async (url: string, options: any) => {
+    if (url.endsWith('/duplicate') && lost) { lost = false; throw new TypeError('Lost response'); }
+    return { ok: true, json: async () => url.endsWith('/duplicate') ? { id: JSON.parse(options.body).id, status: 'Draft' } : { removed: true } };
+  });
+  await assert.rejects(h.api.coreDuplicate({ id: 'original' }), /Lost response/);
+  const resumed = harness(h.store);
+  resumed.respond(async (_url: string, options: any) => ({ ok: true, json: async () => ({ id: JSON.parse(options.body).id, status: 'Draft' }) }));
+  const copy = await resumed.api.coreDuplicate({ id: 'original' });
+  const requests = [...h.calls, ...resumed.calls].filter(call => call.url.endsWith('/duplicate'));
+  assert.equal(requests.length, 2);
+  assert.equal(JSON.parse(requests[0].options.body).id, copy.id);
+  assert.equal(JSON.parse(requests[1].options.body).id, copy.id);
+  assert.ok(!h.store.has('axolotl-core-copy:org:original'));
+  await h.api.coreDeleteContent({ id: 'original' });
+  assert.equal(h.calls.at(-1)!.url, 'https://api.example.com/posts/original/content');
+  assert.equal(h.calls.at(-1)!.options.method, 'DELETE');
+});
+
+test('deleting an incomplete copy clears its persisted retry target so the original can be duplicated again', async () => {
+  const h = harness(); h.store.set('axolotl-core-tokens', JSON.stringify({ access_token: 'access', expires_at: Date.now() + 300000 }));
+  h.respond(async () => { throw new TypeError('Lost response'); });
+  await assert.rejects(h.api.coreDuplicate({ id: 'original' }), /Retry Duplicate/);
+  const abandoned = h.store.get('axolotl-core-copy:org:original')!;
+  const resumed = harness(h.store);
+  resumed.respond(async (url: string, options: any) => ({ ok: true, json: async () => url.endsWith('/duplicate') ? { id: JSON.parse(options.body).id, status: 'Draft' } : { removed: true } }));
+  await resumed.api.coreDeleteContent({ id: abandoned });
+  assert.ok(!h.store.has('axolotl-core-copy:org:original'));
+  const fresh = await resumed.api.coreDuplicate({ id: 'original' });
+  assert.notEqual(fresh.id, abandoned);
 });
 
 test('Core callback denial is distinct from a token exchange rejection and never exposes provider descriptions', async () => {
