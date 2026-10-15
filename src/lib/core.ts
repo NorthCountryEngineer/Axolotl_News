@@ -96,8 +96,16 @@ export async function coreRequest<T>(path: string, method = 'GET', body?: unknow
 }
 export async function coreSession(): Promise<boolean> {
   if (!readTokens()) return false;
-  try { await coreRequest('/session'); return true; }
+  try { const session = await coreRequest<{ permissions?: unknown }>('/session'); return Array.isArray(session.permissions) && session.permissions.includes('posts-write'); }
   catch (e) { throw new Error(`Newsroom access check failed: ${e instanceof Error ? e.message : 'The publishing service could not be reached.'}`); }
+}
+export async function coreAdminSession(): Promise<boolean> {
+  if (!readTokens()) return false;
+  try {
+    const session = await coreRequest<{ permissions?: unknown }>('/session');
+    const permissions = session.permissions;
+    return Array.isArray(permissions) && ['posts-write', 'posts-publish'].every(permission => permissions.includes(permission));
+  } catch (e) { throw new Error(`Newsroom admin check failed: ${e instanceof Error ? e.message : 'The publishing service could not be reached.'}`); }
 }
 async function revokeToken(token: string) {
   const c = config();
@@ -140,3 +148,31 @@ export async function corePublish(post: Post): Promise<Post> {
 export async function coreUnpublish(post: Post) { const draft = await coreSave(post); await coreRequest(`/published/${post.id}`, 'DELETE'); await coreSave({ ...draft, status: 'Draft', publishedAt: undefined }); }
 export async function coreCleanup(postId: string) { await coreRequest(`/media/cleanup/${postId}`, 'DELETE'); }
 export async function coreDelete(post: Post) { await coreRequest(`/posts/${post.id}`, 'DELETE'); }
+const pendingDuplicates = new Map<string, string>();
+export async function coreDuplicate(post: Post): Promise<Post> {
+  // A lost response must resume the same copy, never create a second one.
+  const storageKey = `axolotl-core-copy:${config().organization_id}:${post.id}`;
+  let stored: string | null = null;
+  try { stored = sessionStorage.getItem(storageKey); } catch { /* Memory fallback also covers restricted browser storage. */ }
+  const id = pendingDuplicates.get(post.id) || (stored && /^[0-9a-f-]{36}$/i.test(stored) ? stored : crypto.randomUUID());
+  pendingDuplicates.set(post.id, id);
+  try { sessionStorage.setItem(storageKey, id); } catch { /* Keep the in-memory retry identity. */ }
+  try {
+    const result = await coreRequest<Post>(`/posts/${post.id}/duplicate`, 'POST', { id });
+    if (result.id !== id || result.status !== 'Draft') throw new Error('The service did not confirm the new draft.');
+    pendingDuplicates.delete(post.id);
+    try { sessionStorage.removeItem(storageKey); } catch { /* The confirmed copy is still usable. */ }
+    return result;
+  } catch (error) { throw new Error(`The copy could not be confirmed. Retry Duplicate to resume the same copy. ${error instanceof Error ? error.message : ''}`.trim()); }
+}
+export async function coreDeleteContent(post: Post): Promise<void> {
+  await coreRequest(`/posts/${post.id}/content`, 'DELETE');
+  for (const [source, target] of pendingDuplicates) if (source === post.id || target === post.id) pendingDuplicates.delete(source);
+  const prefix = `axolotl-core-copy:${config().organization_id}:`;
+  try {
+    for (let index = sessionStorage.length - 1; index >= 0; index--) {
+      const key = sessionStorage.key(index);
+      if (key?.startsWith(prefix) && (key === prefix + post.id || sessionStorage.getItem(key) === post.id)) sessionStorage.removeItem(key);
+    }
+  } catch { /* Deletion succeeded even when browser storage becomes unavailable. */ }
+}

@@ -5,7 +5,7 @@ import { fetchAuthSession, getCurrentUser, signOut } from 'aws-amplify/auth';
 import { getUrl, copy, uploadData, remove, list, downloadData } from 'aws-amplify/storage';
 import type { Schema } from '../../amplify/data/resource';
 import { localPosts, putLocalAsset, localAsset, removeLocalAssets } from './local';
-import { mediaKeys, publicDocument, validatePost, validateFile, extensionFor, type Post, type StoryDocument } from './model';
+import { mediaKeys, publicDocument, safeMediaKey, validatePost, validateFile, extensionFor, type Post } from './model';
 const outputs=import.meta.glob('../../amplify_outputs.json',{eager:true,import:'default'});
 export const isCloud=['cloud','nce'].includes(import.meta.env.VITE_APP_MODE);
 export const isCore=core.isCore;
@@ -15,6 +15,7 @@ const client=isCloud&&!isCore?generateClient<Schema>():undefined;
 function checkErrors<T>(r:{data:T;errors?:readonly {message:string}[]}):T {if(r.errors?.length)throw new Error(r.errors.map(e=>e.message).join('; '));return r.data;}
 function mapPost(raw:unknown,published=false):Post{const p=raw as Post;return {...p,status:published?'Published':p.status||'Draft',coverKey:p.coverKey||undefined,publishedAt:p.publishedAt||undefined};}
 export async function editorSession():Promise<boolean>{if(isCore)return core.coreSession();if(!isCloud)return true;try{await getCurrentUser();const s=await fetchAuthSession();const groups=s.tokens?.accessToken.payload['cognito:groups'];return Array.isArray(groups)&&groups.includes('Editors');}catch{return false;}}
+export async function adminSession():Promise<boolean>{if(isCore)return core.coreAdminSession();return editorSession();}
 export async function logout(){if(isCore)return core.coreLogout();if(isCloud)await signOut();}
 export async function listPosts(published=false):Promise<Post[]>{
   if(isCore)return core.coreList(published);
@@ -104,4 +105,74 @@ export async function deleteDraft(post:Post){
     do{const r=await list({path:`drafts/${post.id}/`,options:{pageSize:100,nextToken}});for(const item of r.items)await remove({path:item.path});nextToken=r.nextToken;}while(nextToken);
     checkErrors(await client.models.Post.delete({id:post.id},{authMode:'userPool'}));
   }
+}
+function editablePost(post:Post):Post{
+  if(post.adminState==='copying')throw new Error('This copy is incomplete. Retry Duplicate on the original post, or delete this copy.');
+  if(post.adminState==='deleting')throw new Error('Deletion is unfinished. Retry Delete to finish removing this post.');
+  return post;
+}
+export async function getEditablePost(id:string):Promise<Post>{
+  if(isCore){const post=(await core.coreList()).find(item=>item.id===id);if(!post)throw new Error('This draft is no longer available. Refresh the newsroom.');return editablePost(post);}
+  if(!client){const post=(await localPosts.list()).find(item=>item.id===id);if(!post)throw new Error('This draft is no longer available. Refresh the newsroom.');return editablePost(post);}
+  const result=checkErrors(await client.models.Post.get({id},{authMode:'userPool'}));
+  if(!result)throw new Error('This draft is no longer available. Refresh the newsroom.');return editablePost(mapPost(result));
+}
+const pendingDuplicates=new Map<string,string>();
+function forgetDuplicate(postId:string){
+  for(const[source,target]of pendingDuplicates)if(source===postId||target===postId)pendingDuplicates.delete(source);
+  const prefix=`axolotl-copy:${isCloud?'cloud':'local'}:`;
+  try{for(let index=sessionStorage.length-1;index>=0;index--){const key=sessionStorage.key(index);if(key?.startsWith(prefix)&&(key===prefix+postId||sessionStorage.getItem(key)===postId))sessionStorage.removeItem(key);}}catch{/* Deletion succeeded even when storage becomes unavailable. */}
+}
+export async function duplicatePost(post:Post):Promise<Post>{
+  if(!await adminSession())throw new Error('Newsroom administrator access is required.');
+  if(isCore)return core.coreDuplicate(post);
+  const storageKey=`axolotl-copy:${isCloud?'cloud':'local'}:${post.id}`;
+  let stored:string|null=null;try{stored=sessionStorage.getItem(storageKey);}catch{/* Use the in-memory retry identity when storage is restricted. */}
+  const pending=pendingDuplicates.get(post.id)||(stored&&/^[0-9a-f-]{36}$/i.test(stored)?stored:undefined),id=pending||crypto.randomUUID();
+  pendingDuplicates.set(post.id,id);
+  try{sessionStorage.setItem(storageKey,id);}catch{/* Keep the in-memory retry identity. */}
+  const completed=()=>{pendingDuplicates.delete(post.id);try{sessionStorage.removeItem(storageKey);}catch{/* The confirmed copy is still usable. */}};
+  // If a previous save committed before its response was lost, return that copy.
+  if(pending){
+    if(!client){const existing=(await localPosts.list()).find(item=>item.id===id);if(existing){completed();return existing;}}
+    else{const existing=checkErrors(await client.models.Post.get({id},{authMode:'userPool'}));if(existing){completed();return mapPost(existing);}}
+  }
+  const source=await getEditablePost(post.id),doc=validatePost(source),keys=new Map<string,string>(),staged:string[]=[];
+  const sourceKeys=[...new Set([...mediaKeys(doc),...(source.coverKey?[source.coverKey]:[])])];
+  let saveAttempted=false;
+  try{
+    for(const key of sourceKeys){
+      if(!safeMediaKey(key)||![`drafts/${source.id}/`,`published/${source.id}/`].some(prefix=>key.startsWith(prefix)))throw new Error('A file does not belong to this post. Re-upload it before duplicating.');
+      const extension=key.split('.').pop()!,target=`drafts/${id}/${crypto.randomUUID()}.${extension}`;
+      if(!isCloud)await putLocalAsset(target,await localAsset(key));else await copy({source:{path:key},destination:{path:target}});
+      keys.set(key,target);staged.push(target);
+    }
+    const copyDoc={...doc,blocks:doc.blocks.map(block=>({...block,id:crypto.randomUUID(),key:block.key?keys.get(block.key):undefined}))};
+    const result:Post={id,title:`${source.title.trim().slice(0,115)} copy`,slug:`${source.slug.slice(0,70)}-copy-${id.slice(0,8)}`,excerpt:source.excerpt,category:source.category,document:JSON.stringify(copyDoc),status:'Draft',coverKey:source.coverKey?keys.get(source.coverKey):undefined,createdAt:new Date().toISOString()};
+    saveAttempted=true;
+    const saved=await savePost(result);completed();return saved;
+  }catch(error){
+    // An uncertain save may already reference these files. Preserve them for retry.
+    if(!saveAttempted)await Promise.allSettled(staged.map(key=>isCloud?remove({path:key}):removeLocalAssets(key)));
+    throw new Error(`The copy could not be completed. Retry Duplicate to resume the same copy. ${error instanceof Error?error.message:''}`.trim());
+  }
+}
+export async function deletePost(post:Post):Promise<void>{
+  if(!await adminSession())throw new Error('Newsroom administrator access is required.');
+  if(isCore)return core.coreDeleteContent(post);
+  // Remove the public snapshot first. A cleanup failure leaves the draft for retry.
+  if(!client){
+    await localPosts.delete(post.id,true);
+    await removeLocalAssets(`published/${post.id}/`);await removeLocalAssets(`drafts/${post.id}/`);
+    await localPosts.deleteContent(post.id);forgetDuplicate(post.id);return;
+  }
+  const live=checkErrors(await client.models.PublishedPost.get({id:post.id},{authMode:'userPool'}));
+  if(live)checkErrors(await client.models.PublishedPost.delete({id:post.id},{authMode:'userPool'}));
+  for(const prefix of [`published/${post.id}/`,`drafts/${post.id}/`]){
+    let nextToken:string|undefined;
+    do{const page=await list({path:prefix,options:{pageSize:100,nextToken}});for(const item of page.items)await remove({path:item.path});nextToken=page.nextToken;}while(nextToken);
+  }
+  const draft=checkErrors(await client.models.Post.get({id:post.id},{authMode:'userPool'}));
+  if(draft)checkErrors(await client.models.Post.delete({id:post.id},{authMode:'userPool'}));
+  forgetDuplicate(post.id);
 }

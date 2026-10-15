@@ -10,6 +10,7 @@ export const localPosts = {
   list:async (published=false) => readState()[published?'published':'drafts'],
   save:async(post:Post,published=false) => {const s=readState();const name=published?'published':'drafts';s[name]=[post,...s[name].filter(p=>p.id!==post.id)];writeState(s);},
   delete:async(id:string,published=false) => {const s=readState();const name=published?'published':'drafts';s[name]=s[name].filter(p=>p.id!==id);writeState(s);},
+  deleteContent:async(id:string) => {const s=readState();writeState({drafts:s.drafts.filter(p=>p.id!==id),published:s.published.filter(p=>p.id!==id)});},
 };
 function database():Promise<IDBDatabase>{return new Promise((resolve,reject)=>{const r=indexedDB.open('axolotl-media',1);r.onupgradeneeded=()=>r.result.createObjectStore('files');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});}
 export async function putLocalAsset(key:string,blob:Blob){const db=await database();await new Promise<void>((resolve,reject)=>{const t=db.transaction('files','readwrite');t.objectStore('files').put(blob,key);t.oncomplete=()=>resolve();t.onerror=()=>reject(t.error);t.onabort=()=>reject(t.error||new Error('Browser storage is full.'));});db.close();}
