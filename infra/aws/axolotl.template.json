@@ -339,6 +339,20 @@
                       "Fn::Sub": "arn:${AWS::Partition}:bedrock:us-west-2::foundation-model/*"
                     }
                   ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "bedrock:GetInferenceProfile"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:application-inference-profile/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*"
+                    }
+                  ]
                 }
               ]
             }
@@ -374,7 +388,7 @@
           "why": "Install provider invocation capability once so newsroom administrators control allowed models through saved application settings without IAM redeployment.",
           "must": [
             "Assistant persistence is limited to its separate state table.",
-            "Bedrock grants only InvokeModel on regional foundation models, own-account regional profiles, and domestic US profile targets.",
+            "Bedrock grants InvokeModel on regional foundation models, own-account regional profiles, and domestic US profile targets; profile metadata reads stay within own-account regional profiles.",
             "Media recognition is limited to regional label detection; no IAM, subscription, training, face, project or model deployment permissions."
           ],
           "mutable": "change-with-constraints"

@@ -47,6 +47,10 @@ test('configured Bedrock models have invocation capability without infrastructur
   const resources: string[] = statement.Resource.map((item: any) => item['Fn::Sub']);
   assert.ok(resources.every(resource => /^arn:\$\{AWS::Partition\}:bedrock:(\$\{AWS::Region\}|us-east-2|us-west-2):/.test(resource)));
   assert.ok(resources.every(resource => /::foundation-model\/\*$|:\$\{AWS::AccountId\}:(application-)?inference-profile\/\*$/.test(resource)));
+  const lookup = policy.PolicyDocument.Statement[1];
+  assert.deepEqual(lookup.Action, ['bedrock:GetInferenceProfile']);
+  assert.ok(lookup.Resource.length > 0);
+  assert.ok(lookup.Resource.every((item: any) => item['Fn::Sub'].includes(':${AWS::Region}:${AWS::AccountId}:') && item['Fn::Sub'].includes('inference-profile/')));
   assert.ok(!JSON.stringify(policy).match(/PassRole|marketplace|Create|Delete|Update|FullAccess|InvokeTool|ApplyGuardrail/));
 });
 
