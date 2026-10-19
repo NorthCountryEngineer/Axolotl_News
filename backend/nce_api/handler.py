@@ -23,6 +23,7 @@ MIMES = {'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/g
 CATEGORIES = {'Stories', 'Fun facts', 'Photos', 'Videos', 'Newsletters', 'Presentation'}
 _ddb = _s3 = _ssm = None
 _secret = None
+_assistant = None
 
 class APIError(Exception):
     def __init__(self, status, message):
@@ -350,6 +351,20 @@ def dispatch(event):
     try: body = json.loads(raw)
     except ValueError: raise APIError(400, 'Invalid JSON.')
     if not isinstance(body, dict): raise APIError(400, 'Expected a JSON object.')
+    if path.startswith('/assistant/'):
+        # Keep assistant dependencies lazy so publishing remains independent.
+        global _assistant
+        if _assistant is None:
+            import importlib.util
+            from pathlib import Path
+            spec = importlib.util.spec_from_file_location('axolotl_agent_framework', Path(__file__).with_name('agent_framework.py'))
+            _assistant = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(_assistant)
+        from types import SimpleNamespace
+        api = SimpleNamespace(authorize=authorize, clients=clients, post_id=post_id,
+            get_post=get_post, changing=changing, media_key=media_key, CATEGORIES=CATEGORIES, MIMES=MIMES)
+        try: return _assistant.dispatch(api, event, method, path, body)
+        except _assistant.FrameworkError as error: raise APIError(error.status, error.message)
     if path == '/media/upload' and method == 'POST':
         authorize(event, 'posts-write'); m = media_key(body.get('key')); mime, size = body.get('mime'), body.get('size')
         maximum = 50 * 1024 * 1024 if mime in {'video/mp4', 'video/webm'} else 10 * 1024 * 1024

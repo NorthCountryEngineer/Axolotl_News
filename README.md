@@ -6,6 +6,12 @@ Authorized publishers can turn on **Admin actions** to reveal each creation's
 **Update**, **Duplicate**, and **Delete** menu. See [content administration](docs/CONTENT_ADMIN.md)
 for local validation and the backend-first release steps.
 
+The studio also offers an optional post assistant with administrator-configured
+modes, agents, model bindings and registered skill workflows. Local assistance
+works without provider calls; paid generative AI and image/video ML require
+separate explicit operator and administrator opt-ins, which default off. See
+[agent workflows and release instructions](docs/AGENT_WORKFLOWS.md).
+
 ## Deploy with NCE Core
 
 Follow the numbered [AWS deployment guide](docs/AWS_DEPLOYMENT.md) for **both applications**, their bootstrap and permissions, and Cloudflare DNS. It includes the exact commands and settings; no AWS resources have been deployed by this project.
