@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Axolotl News Core-bound serverless API and private assistant state; paid AI and media analysis disabled by default.",
+  "Description": "Axolotl News Core-bound serverless publishing, private assistant state, and administrator-authorized AI and media workflows.",
   "Parameters": {
     "ApplicationOrigin": {
       "Type": "String",
@@ -42,38 +42,6 @@
         2
       ],
       "Description": "2 for bounded concurrency; 0 omits a reservation if the account quota cannot preserve 100 unreserved executions. Not a bill cap."
-    },
-    "AllowPaidModels": {
-      "Type": "String",
-      "Default": "false",
-      "AllowedValues": [
-        "true",
-        "false"
-      ],
-      "Description": "Explicit operator opt-in for paid model calls; application configuration must also permit them. Not a bill cap."
-    },
-    "EnableMediaModels": {
-      "Type": "String",
-      "Default": "false",
-      "AllowedValues": [
-        "true",
-        "false"
-      ],
-      "Description": "Additional operator opt-in for Rekognition image/video label detection; requires AllowPaidModels=true."
-    },
-    "BedrockModelAllowlist": {
-      "Type": "String",
-      "Default": "",
-      "AllowedPattern": "^$|^[A-Za-z0-9][A-Za-z0-9._:/-]*(,[A-Za-z0-9][A-Za-z0-9._:/-]*)*$",
-      "MaxLength": 1024,
-      "Description": "Exact comma-separated Bedrock invocation target IDs or ARNs; no spaces or wildcards. Empty blocks Bedrock calls."
-    },
-    "BedrockResourceArns": {
-      "Type": "String",
-      "Default": "",
-      "AllowedPattern": "^$|^arn:aws[a-z-]*:bedrock:[a-z0-9-]*:[0-9]*:(foundation-model|inference-profile|application-inference-profile)/[A-Za-z0-9._:/-]+(,arn:aws[a-z-]*:bedrock:[a-z0-9-]*:[0-9]*:(foundation-model|inference-profile|application-inference-profile)/[A-Za-z0-9._:/-]+)*$",
-      "MaxLength": 4096,
-      "Description": "Exact comma-separated Bedrock IAM ARNs, no wildcard. Include profile ARN and every destination foundation-model ARN when using inference profiles."
     }
   },
   "Resources": {
@@ -345,74 +313,69 @@
             }
           },
           {
-            "Fn::If": [
-              "BedrockModelsEnabled",
-              {
-                "PolicyName": "ExplicitBedrockModelsOnly",
-                "PolicyDocument": {
-                  "Version": "2012-10-17",
-                  "Statement": [
+            "PolicyName": "AdminConfiguredBedrockModels",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "bedrock:InvokeModel"
+                  ],
+                  "Resource": [
                     {
-                      "Effect": "Allow",
-                      "Action": "bedrock:InvokeModel",
-                      "Resource": {
-                        "Fn::Split": [
-                          ",",
-                          {
-                            "Ref": "BedrockResourceArns"
-                          }
-                        ]
-                      }
+                      "Fn::Sub": "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:application-inference-profile/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:bedrock:us-east-2::foundation-model/*"
+                    },
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:bedrock:us-west-2::foundation-model/*"
                     }
                   ]
                 }
-              },
-              {
-                "Ref": "AWS::NoValue"
-              }
-            ]
+              ]
+            }
           },
           {
-            "Fn::If": [
-              "MediaModelsEnabled",
-              {
-                "PolicyName": "ExplicitMediaLabelsOnly",
-                "PolicyDocument": {
-                  "Version": "2012-10-17",
-                  "Statement": [
-                    {
-                      "Effect": "Allow",
-                      "Action": [
-                        "rekognition:DetectLabels",
-                        "rekognition:StartLabelDetection",
-                        "rekognition:GetLabelDetection"
-                      ],
-                      "Resource": "*",
-                      "Condition": {
-                        "StringEquals": {
-                          "aws:RequestedRegion": {
-                            "Ref": "AWS::Region"
-                          }
-                        }
+            "PolicyName": "AdminConfiguredMediaLabels",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "rekognition:DetectLabels",
+                    "rekognition:StartLabelDetection",
+                    "rekognition:GetLabelDetection"
+                  ],
+                  "Resource": "*",
+                  "Condition": {
+                    "StringEquals": {
+                      "aws:RequestedRegion": {
+                        "Ref": "AWS::Region"
                       }
                     }
-                  ]
+                  }
                 }
-              },
-              {
-                "Ref": "AWS::NoValue"
-              }
-            ]
+              ]
+            }
           }
         ]
       },
       "Metadata": {
         "com.aws.cloudformation.Context": {
-          "why": "Extend existing API identity only for isolated assistant persistence and opted-in exact model operations.",
+          "why": "Install provider invocation capability once so newsroom administrators control allowed models through saved application settings without IAM redeployment.",
           "must": [
-            "Assistant persistence is limited to the separate state table.",
-            "No Bedrock permission without paid opt-in and nonempty exact target/resource lists.",
-            "Rekognition labels require both paid and media opt-ins; no training, face or project permissions."
+            "Assistant persistence is limited to its separate state table.",
+            "Bedrock grants only InvokeModel on regional foundation models, own-account regional profiles, and domestic US profile targets.",
+            "Media recognition is limited to regional label detection; no IAM, subscription, training, face, project or model deployment permissions."
           ],
           "mutable": "change-with-constraints"
         }
@@ -490,32 +453,17 @@
             },
             "ASSISTANT_TABLE": {
               "Ref": "AssistantState"
-            },
-            "ALLOW_PAID_MODELS": {
-              "Ref": "AllowPaidModels"
-            },
-            "REKOGNITION_ENABLED": {
-              "Ref": "EnableMediaModels"
-            },
-            "BEDROCK_MODEL_ALLOWLIST": {
-              "Fn::If": [
-                "BedrockModelsEnabled",
-                {
-                  "Ref": "BedrockModelAllowlist"
-                },
-                ""
-              ]
             }
           }
         }
       },
       "Metadata": {
         "com.aws.cloudformation.Context": {
-          "why": "Reuse current bounded API runtime; persist assistant state separately and never enable model traffic through frontend settings alone.",
+          "why": "Reuse current bounded publishing runtime; persist assistant consent and mode access in versioned admin settings rather than independent deployment switches.",
           "must": [
-            "Do not change existing Core credentials or content/media bindings.",
-            "Paid and media gates default off.",
-            "No model/background operation may outlive the request without a persisted checkpoint."
+            "Preserve Core credentials and content/media bindings.",
+            "Default assistant configuration prohibits paid execution until an administrator saves permission.",
+            "No provider operation starts during configuration or outlives its request without a persisted checkpoint."
           ],
           "mutable": "change-with-constraints"
         }
@@ -689,66 +637,6 @@
           ]
         }
       ]
-    },
-    "PaidModelsEnabled": {
-      "Fn::Equals": [
-        {
-          "Ref": "AllowPaidModels"
-        },
-        "true"
-      ]
-    },
-    "BedrockTargetsConfigured": {
-      "Fn::Not": [
-        {
-          "Fn::Equals": [
-            {
-              "Ref": "BedrockModelAllowlist"
-            },
-            ""
-          ]
-        }
-      ]
-    },
-    "BedrockResourcesConfigured": {
-      "Fn::Not": [
-        {
-          "Fn::Equals": [
-            {
-              "Ref": "BedrockResourceArns"
-            },
-            ""
-          ]
-        }
-      ]
-    },
-    "BedrockModelsEnabled": {
-      "Fn::And": [
-        {
-          "Condition": "PaidModelsEnabled"
-        },
-        {
-          "Condition": "BedrockTargetsConfigured"
-        },
-        {
-          "Condition": "BedrockResourcesConfigured"
-        }
-      ]
-    },
-    "MediaModelsEnabled": {
-      "Fn::And": [
-        {
-          "Condition": "PaidModelsEnabled"
-        },
-        {
-          "Fn::Equals": [
-            {
-              "Ref": "EnableMediaModels"
-            },
-            "true"
-          ]
-        }
-      ]
     }
   },
   "Metadata": {
@@ -756,15 +644,15 @@
       "AWSAgentToolkit": "aws-cloudformation@3"
     },
     "com.aws.cloudformation.Context": {
-      "arch": "HTTP API -> Core-authorized Lambda -> separate draft, publication and assistant tables + private media; optional explicit model calls.",
+      "arch": "HTTP API -> Core-authorized Lambda -> separate content/assistant tables and private media; saved admin settings authorize explicit workflow model calls.",
       "must": [
         "Preserve existing content tables and media bucket when updating.",
-        "Paid model execution requires stack opt-in and administrator configuration."
+        "Only saved administrator configuration and current mode access authorize model execution; saving settings never invokes a model."
       ],
       "ref": [
         {
           "at": "docs/AGENT_WORKFLOWS.md",
-          "has": "assistant access, model allowlists, retained state and backend-first release",
+          "has": "assistant access, admin model authorization, retained state and API-first release",
           "scope": "assistant"
         }
       ]

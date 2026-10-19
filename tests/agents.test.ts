@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { applyAgentSuggestion } from '../src/lib/agent-draft.ts';
-import { canonicalJSON, contextFingerprint, defaultAgentSettings, validateAgentConfig } from '../src/lib/agent-defaults.ts';
-import { LocalAgentRuntime, localMediaInventory } from '../src/lib/agent-local.ts';
+import { canonicalJSON, contextFingerprint, defaultAgentSettings, modeAvailable, validateAgentConfig } from '../src/lib/agent-defaults.ts';
+import { LOCAL_ASSISTANT_SUBJECT, LocalAgentRuntime, localMediaInventory } from '../src/lib/agent-local.ts';
 import { parseDocument, type Post } from '../src/lib/model.ts';
 import type { AgentContext, AgentSession } from '../src/lib/agent-types.ts';
 
@@ -26,6 +26,34 @@ test('configuration validation rejects broken references, unknown fields and pro
   const cfg = defaultAgentSettings().config; cfg.agents[0].modelId = 'missing'; assert.throws(() => validateAgentConfig(cfg), /unknown model/);
   assert.throws(() => validateAgentConfig({ ...defaultAgentSettings().config, api_key: 'never-store-secrets-here' }), /Unexpected/);
   const badModel = defaultAgentSettings().config; badModel.models[0].kind = 'ml'; assert.throws(() => validateAgentConfig(badModel), /do not match/);
+});
+test('mode audiences accept legacy configurations and validate exact Core account grants', () => {
+  const cfg = defaultAgentSettings().config, mode = cfg.modes[0]; delete mode.audience;
+  assert.doesNotThrow(() => validateAgentConfig(cfg)); assert.equal(modeAvailable(mode, LOCAL_ASSISTANT_SUBJECT), true);
+  mode.audience = { allEditors: false, userIds: [LOCAL_ASSISTANT_SUBJECT] };
+  assert.doesNotThrow(() => validateAgentConfig(cfg)); assert.equal(modeAvailable(mode, LOCAL_ASSISTANT_SUBJECT), true); assert.equal(modeAvailable(mode, pid), false);
+  mode.audience.userIds.push(LOCAL_ASSISTANT_SUBJECT); assert.throws(() => validateAgentConfig(cfg), /unique Core account/);
+  mode.audience.userIds = ['not-a-core-account']; assert.throws(() => validateAgentConfig(cfg), /unique Core account/);
+});
+test('per-account mode grants filter choices and revocation stops existing conversations', async () => {
+  const { engine } = runtime(), cfg = engine.settings().config;
+  cfg.modes[0].audience = { allEditors: false, userIds: [pid] }; engine.save(cfg, 0);
+  assert.equal(engine.settings().availableModeIds?.includes('media-coach'), false);
+  await assert.rejects(() => session(engine), /unavailable for your account/);
+  const grant = engine.settings().config; grant.modes[0].audience!.userIds = [LOCAL_ASSISTANT_SUBJECT]; engine.save(grant, grant.revision);
+  const created = await session(engine), revoke = engine.settings().config;
+  revoke.modes[0].audience!.userIds = []; engine.save(revoke, revoke.revision);
+  assert.throws(() => turn(engine, created, 'message', 'Hello'), /unavailable for your account/);
+});
+test('changing an agent model revokes the old conversation capability', async () => {
+  const { engine } = runtime(), created = await session(engine), cfg = engine.settings().config;
+  cfg.agents[0].modelId = 'image-labels'; engine.save(cfg, cfg.revision);
+  assert.throws(() => turn(engine, created, 'message', 'Hello'), /agent has been disabled or changed/);
+});
+test('changing a mode workflow prevents execution of its previous workflow', async () => {
+  const { engine } = runtime(), created = await session(engine), cfg = engine.settings().config;
+  cfg.modes[0].workflowId = 'image-analysis'; engine.save(cfg, cfg.revision);
+  assert.throws(() => turn(engine, created, 'workflow'), /different agent or workflow/);
 });
 test('DAG validation rejects cycles, undeclared inputs and non-ancestor output bindings', () => {
   const cycle = defaultAgentSettings().config; cycle.workflows[0].graph.nodes[0].depends_on = ['review']; assert.throws(() => validateAgentConfig(cycle), /cycle/);

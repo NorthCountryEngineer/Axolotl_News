@@ -60,7 +60,7 @@ class FrameworkTests(unittest.TestCase):
         self.post = None
         self.api = types.SimpleNamespace(clients=lambda: (self.database, Mock(), Mock()), get_post=lambda pid: self.post,
             changing=api.changing, post_id=api.post_id, media_key=api.media_key, CATEGORIES=api.CATEGORIES, MIMES=api.MIMES)
-        self.claims = {'sub': USER, 'permissions': ['posts-write', 'posts-publish']}
+        self.claims = {'sub': USER, 'permissions': ['posts-write', 'posts-publish', 'agents-manage']}
         self.attr = patch.object(assistant, 'attr', Attribute); self.attr.start(); self.addCleanup(self.attr.stop)
         self.provider = Mock(); self.provider_patch = patch.object(assistant, 'provider', return_value=self.provider)
         self.provider_patch.start(); self.addCleanup(self.provider_patch.stop)
@@ -90,7 +90,6 @@ class FrameworkTests(unittest.TestCase):
         self.context['document'] = json.dumps({'version': 1, 'blocks': [block]}); self.context['mediaIds'] = ['movie']
         self.post = {'id': PID, 'document': self.context['document'], 'organization_id': ORG}
     def enable_paid(self):
-        os.environ['ALLOW_PAID_MODELS'] = 'true'; os.environ['REKOGNITION_ENABLED'] = 'true'
         self.configure(lambda config: config.update(allowPaidExecution=True))
     def error(self, status, callback):
         with self.assertRaises(assistant.FrameworkError) as caught: callback()
@@ -197,11 +196,57 @@ class FrameworkTests(unittest.TestCase):
         self.assertNotEqual(stored['_snapshot']['agents'][0]['instructions'], 'Updated future agent instructions')
         self.configure(lambda config: config['agents'][0].update(enabled=False))
         self.error(403, lambda: self.turn(state))
-    def test_paid_image_requires_both_gates_and_media_gate(self):
+    def test_paid_image_requires_saved_admin_authorization_even_if_legacy_env_is_enabled(self):
         self.image(); state = self.inventory_start('image-analysis')
         self.error(403, lambda: self.turn(state, 'advance', request=ASSET))
         os.environ['ALLOW_PAID_MODELS'] = 'true'
         self.error(403, lambda: self.turn(state, 'advance', request=ASSET))
+        self.provider_patch.target.provider.assert_not_called()
+    def test_admin_save_enables_existing_session_without_env_gates_or_provider_calls(self):
+        self.image(); state = self.inventory_start('image-analysis')
+        self.error(403, lambda: self.turn(state, 'advance', request=ASSET))
+        self.enable_paid()
+        self.assertTrue(assistant.settings(self.api)['paidModelsAllowed'])
+        self.provider_patch.target.provider.assert_not_called()
+        result = self.turn(state, 'advance', request=ASSET)
+        self.assertEqual(result['usage']['modelCalls'], 1)
+        self.provider.detect_labels.assert_called_once()
+    def test_legacy_mode_without_audience_remains_available(self):
+        self.configure(lambda config: [mode.pop('audience', None) for mode in config['modes']])
+        self.assertEqual(self.create()['modeId'], 'media-coach')
+    def test_mode_audience_grant_and_live_revocation_apply_to_every_turn(self):
+        self.image(); self.enable_paid()
+        self.configure(lambda config: config['modes'][1].update(audience={'allEditors': False, 'userIds': [ASSET]}))
+        self.error(403, lambda: self.create('image-analysis'))
+        self.configure(lambda config: config['modes'][1].update(audience={'allEditors': False, 'userIds': [USER]}))
+        state = self.inventory_start('image-analysis')
+        self.configure(lambda config: config['modes'][1].update(audience={'allEditors': False, 'userIds': []}))
+        self.error(403, lambda: self.turn(state, 'advance', request=ASSET))
+        self.provider_patch.target.provider.assert_not_called()
+    def test_writer_settings_only_offer_assigned_modes_and_hide_recipient_ids(self):
+        self.configure(lambda config: config['modes'][1].update(audience={'allEditors': False, 'userIds': [ASSET]}))
+        writer = {'sub': USER, 'permissions': ['posts-write', 'posts-publish']}
+        settings = assistant.settings(self.api, writer)
+        self.assertNotIn('image-analysis', settings['availableModeIds'])
+        self.assertNotIn('image-analysis', {mode['id'] for mode in settings['config']['modes']})
+        self.assertTrue(all('audience' not in mode for mode in settings['config']['modes']))
+        self.assertEqual(len(assistant.settings(self.api, self.claims)['config']['modes']), 3)
+    def test_invalid_mode_recipient_ids_and_duplicate_grants_are_rejected(self):
+        for ids in [[USER, USER], ['not-a-core-subject'], [None]]:
+            config = assistant.defaults(); config['modes'][0]['audience'] = {'allEditors': False, 'userIds': ids}
+            self.error(400, lambda: assistant.validate_config(config))
+    def test_changed_agent_model_and_mode_workflow_revoke_snapshot_capabilities(self):
+        state = self.create()
+        self.configure(lambda config: config['agents'][0].update(modelId='image-labels'))
+        self.error(403, lambda: self.turn(state))
+        self.configure(lambda config: config['agents'][0].update(modelId='local-coach'))
+        self.configure(lambda config: config['modes'][0].update(workflowId='image-analysis'))
+        self.error(403, lambda: self.turn(state))
+        self.provider_patch.target.provider.assert_not_called()
+    def test_changed_workflow_step_agent_revokes_snapshot_capabilities(self):
+        state = self.create()
+        self.configure(lambda config: config['workflows'][0]['graph']['nodes'][1].update(agent_id='image-analyst'))
+        self.error(403, lambda: self.turn(state))
         self.provider_patch.target.provider.assert_not_called()
     def test_paid_image_call_is_reserved_before_io_and_not_replayed(self):
         self.image(); self.enable_paid(); state = self.inventory_start('image-analysis')
@@ -222,6 +267,27 @@ class FrameworkTests(unittest.TestCase):
         self.assertEqual(self.turn(state, 'advance', request=ASSET), result)
         self.error(409, lambda: self.turn(result, 'advance', request=USER))
         self.provider.detect_labels.assert_called_once()
+    def test_known_provider_error_explains_remedy_without_leaking_raw_details_or_retrying(self):
+        self.image(); self.enable_paid(); state = self.inventory_start('image-analysis')
+        error = RuntimeError('private credentials and provider message')
+        error.response = {'Error': {'Code': 'AccessDeniedException', 'Message': 'secret token value'}}
+        self.provider.detect_labels.side_effect = error
+        result = self.turn(state, 'advance', request=ASSET)
+        self.assertEqual(result['status'], 'uncertain')
+        self.assertIn('check this account’s model availability', result['error'])
+        self.assertNotIn('private credentials', result['error']); self.assertNotIn('secret token', result['error'])
+        self.assertEqual(self.turn(state, 'advance', request=ASSET), result)
+        self.error(409, lambda: self.turn(result, 'advance', request=USER))
+        self.provider.detect_labels.assert_called_once()
+    def test_known_provider_hints_use_only_allowlisted_error_codes(self):
+        for code, expected in [('AccessDeniedException', 'denied'), ('ResourceNotFoundException', 'could not find'),
+                               ('ValidationException', 'rejected'), ('ThrottlingException', 'limiting')]:
+            with self.subTest(code=code):
+                error = RuntimeError('private response'); error.response = {'Error': {'Code': code, 'Message': 'private response'}}
+                hint = assistant.provider_failure_hint(error)
+                self.assertIn(expected, hint); self.assertNotIn('private response', hint)
+        error = RuntimeError('private response'); error.response = {'Error': {'Code': 'UnexpectedSecretCode'}}
+        self.assertEqual(assistant.provider_failure_hint(error), '')
     def test_uncertain_crash_marker_cannot_be_replayed(self):
         self.image(); self.enable_paid(); state = self.inventory_start('image-analysis')
         original = assistant.save
@@ -276,24 +342,32 @@ class FrameworkTests(unittest.TestCase):
         state = self.inventory_start('image-analysis')
         self.error(409, lambda: self.turn(state, 'advance', request=ASSET))
         self.provider_patch.target.provider.assert_not_called()
-    def test_bedrock_exact_deployment_allowlist_and_max_tokens(self):
+    def test_enabled_admin_bedrock_target_uses_saved_registry_and_max_tokens(self):
         self.enable_paid()
         def change(config):
             config['models'][1].update(target='example.model-v1', enabled=True)
             config['agents'][0]['modelId'] = 'bedrock-writer'
         self.configure(change); state = self.create()
-        self.error(403, lambda: self.turn(state))
-        os.environ['BEDROCK_MODEL_ALLOWLIST'] = 'example.model-v1'
         result = self.turn(state)
         options = self.provider.converse.call_args.kwargs
         self.assertEqual(options['inferenceConfig']['maxTokens'], 1024)
         self.assertNotIn('toolConfig', options); self.assertEqual(result['usage'], {'modelCalls': 1, 'inputTokens': 10, 'outputTokens': 5})
+    def test_current_lower_model_output_limit_applies_to_existing_snapshot(self):
+        self.enable_paid()
+        def change(config):
+            config['models'][1].update(target='example.model-v1', enabled=True)
+            config['agents'][0]['modelId'] = 'bedrock-writer'
+        self.configure(change); state = self.create()
+        self.configure(lambda config: config['models'][1].update(maxOutputTokens=64))
+        result = self.turn(state)
+        self.assertEqual(result['usage']['modelCalls'], 1)
+        self.assertEqual(self.provider.converse.call_args.kwargs['inferenceConfig']['maxTokens'], 64)
     def test_bedrock_missing_usage_stays_uncertain(self):
         self.enable_paid()
         def change(config):
             config['models'][1].update(target='example.model-v1', enabled=True)
             config['agents'][0]['modelId'] = 'bedrock-writer'
-        self.configure(change); os.environ['BEDROCK_MODEL_ALLOWLIST'] = 'example.model-v1'
+        self.configure(change)
         self.provider.converse.return_value = {'output': {'message': {'content': [{'text': 'Unconfirmed reply'}]}}}
         result = self.turn(self.create())
         self.assertEqual(result['status'], 'uncertain')
@@ -304,7 +378,7 @@ class FrameworkTests(unittest.TestCase):
         def change(config):
             config['models'][1].update(target='example.model-v1', enabled=True)
             config['agents'][0]['modelId'] = 'bedrock-writer'
-        self.configure(change); os.environ['BEDROCK_MODEL_ALLOWLIST'] = 'example.model-v1'
+        self.configure(change)
         self.provider.converse.return_value = {'output': {'message': {'content': []}}, 'usage': {'inputTokens': 10, 'outputTokens': 5}}
         state = self.turn(self.create())
         self.assertEqual(state['status'], 'uncertain')
@@ -315,7 +389,7 @@ class FrameworkTests(unittest.TestCase):
         def change(config):
             config['models'][1].update(target='example.model-v1', enabled=True)
             config['agents'][0]['modelId'] = 'bedrock-writer'
-        self.configure(change); os.environ['BEDROCK_MODEL_ALLOWLIST'] = 'example.model-v1'
+        self.configure(change)
         self.provider.converse.return_value['usage'] = {'inputTokens': 10}
         state = self.turn(self.create())
         self.assertEqual(state['status'], 'uncertain')
@@ -325,7 +399,7 @@ class FrameworkTests(unittest.TestCase):
         def change(config):
             config['models'][1].update(target='example.model-v1', enabled=True)
             config['agents'][0]['modelId'] = 'bedrock-writer'
-        self.configure(change); os.environ['BEDROCK_MODEL_ALLOWLIST'] = 'example.model-v1'
+        self.configure(change)
         self.provider.converse.return_value = {'output': {'message': {'content': [{'text': 'Over cap content'}]}}, 'usage': {'inputTokens': 10, 'outputTokens': 2000}}
         state = self.turn(self.create())
         self.assertEqual(state['status'], 'uncertain'); self.assertEqual(state['usage']['outputTokens'], 2000)
@@ -349,7 +423,7 @@ class FrameworkTests(unittest.TestCase):
         def change(config):
             config['models'][1].update(target='example.model-v1', enabled=True)
             config['agents'][0]['modelId'] = 'bedrock-writer'
-        self.configure(change); os.environ['BEDROCK_MODEL_ALLOWLIST'] = 'example.model-v1'
+        self.configure(change)
         state = self.turn(self.create(), message='First detail about my pet')
         self.turn(state, message='Please use that detail', request=ASSET)
         prompt = json.loads(self.provider.converse.call_args.kwargs['messages'][0]['content'][0]['text'])
@@ -359,7 +433,7 @@ class FrameworkTests(unittest.TestCase):
         def change(config):
             config['models'][1].update(target='example.model-v1', enabled=True)
             config['agents'][0]['modelId'] = 'bedrock-writer'
-        self.configure(change); os.environ['BEDROCK_MODEL_ALLOWLIST'] = 'example.model-v1'
+        self.configure(change)
         proposed = {'text': 'Here is a draft to review.', 'suggestion': {'summary': 'Please check the wording.', 'title': 'A quiet afternoon',
             'excerpt': 'An afternoon by the plants.', 'blocks': [{'type': 'text', 'text': '<b>A plain text story</b>'}],
             'captions': [{'blockId': 'picture', 'caption': 'By the plants', 'alt': 'An axolotl near a plant'}]}}
@@ -404,7 +478,7 @@ class FrameworkTests(unittest.TestCase):
             config['agents'][0]['modelId'] = 'bedrock-writer'
             config['workflows'][0]['graph'].update(nodes=[{'id': 'writer', 'name': 'Write a draft', 'skill': 'agent.respond',
                 'agent_id': 'media-coach', 'depends_on': [], 'inputs': {'message': 'Help draft an introduction.'}}], outputs=[{'name': 'suggestion', 'node_id': 'writer'}])
-        self.configure(change); os.environ['BEDROCK_MODEL_ALLOWLIST'] = 'example.model-v1'
+        self.configure(change)
         self.provider.converse.return_value['output']['message']['content'][0]['text'] = json.dumps({'text': 'Review this draft.', 'suggestion': {'summary': 'Check this title.', 'title': 'Our new story'}})
         state = self.turn(self.create(), 'workflow')
         result = self.turn(state, 'advance', request=ASSET)
@@ -457,6 +531,22 @@ class FrameworkTests(unittest.TestCase):
             self.claims['permissions'] = []
             event['requestContext']['http']['method'] = 'GET'
             self.assertEqual(api.handler(event, None)['statusCode'], 403)
+    def test_publishers_and_account_managers_cannot_authorize_models_but_agent_admins_can(self):
+        api._assistant = assistant
+        def auth(event, *permissions):
+            if any(permission not in self.claims['permissions'] for permission in permissions): raise api.APIError(403, 'Denied')
+            return self.claims
+        event = {'requestContext': {'http': {'method': 'PUT'}}, 'rawPath': '/assistant/config', 'headers': {}}
+        with patch.object(api, 'authorize', side_effect=auth), patch.object(api, 'clients', return_value=(self.database, Mock(), Mock())):
+            for permissions, expected in [(['posts-write', 'posts-publish'], 403),
+                    (['posts-write', 'accounts-manage'], 403), (['posts-write', 'agents-manage'], 200),
+                    (['posts-write', 'admin'], 200)]:
+                with self.subTest(permissions=permissions):
+                    self.claims['permissions'] = permissions
+                    config = assistant.configuration(self.api); config['allowPaidExecution'] = True
+                    event['body'] = json.dumps({'config': config, 'expectedRevision': config['revision']})
+                    self.assertEqual(api.handler(event, None)['statusCode'], expected)
+            self.provider_patch.target.provider.assert_not_called()
     def test_payload_bound_is_checked_before_storage(self):
         self.error(413, lambda: assistant.save(self.api, 'too-large', {'revision': 0, 'huge': 'x' * 330001}))
         self.assertEqual(self.table.rows, {})

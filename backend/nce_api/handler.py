@@ -24,6 +24,7 @@ CATEGORIES = {'Stories', 'Fun facts', 'Photos', 'Videos', 'Newsletters', 'Presen
 _ddb = _s3 = _ssm = None
 _secret = None
 _assistant = None
+_accounts = None
 
 class APIError(Exception):
     def __init__(self, status, message):
@@ -321,7 +322,9 @@ def dispatch(event):
     if method == 'GET' and path == '/health': return {'status': 'ok'}
     if method == 'GET' and path == '/session':
         claims = authorize(event, 'posts-write')
-        return {'subject': claims['sub'], 'permissions': claims['permissions']}
+        return {'subject': claims['sub'], 'permissions': claims['permissions'],
+            'canManageAccounts': any(value in claims['permissions'] for value in ('admin', 'accounts-manage')),
+            'canConfigureAgents': any(value in claims['permissions'] for value in ('admin', 'agents-manage'))}
     if path in {'/posts', '/published'} and method == 'GET':
         published = path == '/published'
         if not published: authorize(event, 'posts-write')
@@ -351,6 +354,18 @@ def dispatch(event):
     try: body = json.loads(raw)
     except ValueError: raise APIError(400, 'Invalid JSON.')
     if not isinstance(body, dict): raise APIError(400, 'Expected a JSON object.')
+    if path == '/admin/accounts' or path.startswith('/admin/accounts/'):
+        global _accounts
+        if _accounts is None:
+            import importlib.util
+            from pathlib import Path
+            spec = importlib.util.spec_from_file_location('axolotl_accounts', Path(__file__).with_name('accounts.py'))
+            _accounts = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(_accounts)
+        from types import SimpleNamespace
+        api = SimpleNamespace(authorize=authorize, credentials=credentials)
+        try: return _accounts.dispatch(api, event, method, path, body)
+        except _accounts.AccountError as error: raise APIError(error.status, error.message)
     if path.startswith('/assistant/'):
         # Keep assistant dependencies lazy so publishing remains independent.
         global _assistant

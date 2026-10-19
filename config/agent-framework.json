@@ -33,8 +33,8 @@
     ], "outputs": [{"name": "suggestion", "node_id": "review"}]}}
   ],
   "modes": [
-    {"id": "media-coach", "name": "Media coach", "description": "Discuss your pictures, video, and captions. Local mode does not inspect pixels.", "welcome": "Tell me what is happening in your media. I can help plan a story and review captions. Select only the files you want to discuss.", "agentId": "media-coach", "workflowId": "media-review", "enabled": true},
-    {"id": "image-analysis", "name": "Image analysis", "description": "Optional paid image subject detection. Requires administrator and deployment approval.", "welcome": "Select one JPEG or PNG. Machine observations are suggestions that you should check before using.", "agentId": "media-coach", "workflowId": "image-analysis", "enabled": true},
-    {"id": "video-analysis", "name": "Video analysis", "description": "Optional paid MP4 analysis with progress checkpoints.", "welcome": "Select one MP4. You control when analysis starts and when to check its progress; no background polling runs.", "agentId": "media-coach", "workflowId": "video-analysis", "enabled": true}
+    {"id": "media-coach", "name": "Media coach", "description": "Discuss your pictures, video, and captions. Local mode does not inspect pixels.", "welcome": "Tell me what is happening in your media. I can help plan a story and review captions. Select only the files you want to discuss.", "agentId": "media-coach", "workflowId": "media-review", "enabled": true, "audience": {"allEditors": true, "userIds": []}},
+    {"id": "image-analysis", "name": "Image analysis", "description": "Optional paid image subject detection. Authorized in administrator settings.", "welcome": "Select one JPEG or PNG. Machine observations are suggestions that you should check before using.", "agentId": "media-coach", "workflowId": "image-analysis", "enabled": true, "audience": {"allEditors": true, "userIds": []}},
+    {"id": "video-analysis", "name": "Video analysis", "description": "Optional paid MP4 analysis with progress checkpoints.", "welcome": "Select one MP4. You control when analysis starts and when to check its progress; no background polling runs.", "agentId": "media-coach", "workflowId": "video-analysis", "enabled": true, "audience": {"allEditors": true, "userIds": []}}
   ]
 }

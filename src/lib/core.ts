@@ -107,6 +107,16 @@ export async function coreAdminSession(): Promise<boolean> {
     return Array.isArray(permissions) && ['posts-write', 'posts-publish'].every(permission => permissions.includes(permission));
   } catch (e) { throw new Error(`Newsroom admin check failed: ${e instanceof Error ? e.message : 'The publishing service could not be reached.'}`); }
 }
+export async function coreAccountAdminSession(): Promise<boolean> {
+  if (!readTokens()) return false;
+  const session = await coreRequest<{ canManageAccounts?: boolean }>('/session');
+  return session.canManageAccounts === true;
+}
+export async function coreAgentAdminSession(): Promise<boolean> {
+  if (!readTokens()) return false;
+  const session = await coreRequest<{ canConfigureAgents?: boolean }>('/session');
+  return session.canConfigureAgents === true;
+}
 async function revokeToken(token: string) {
   const c = config();
   try { await fetch(`${c.issuer}/oauth/revoke/`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: c.browser_client_id, token }), credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(10000) }); } catch { /* Credentials are still cleared locally when Core is unreachable. */ }

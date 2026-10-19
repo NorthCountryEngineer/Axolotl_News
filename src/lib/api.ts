@@ -16,6 +16,8 @@ function checkErrors<T>(r:{data:T;errors?:readonly {message:string}[]}):T {if(r.
 function mapPost(raw:unknown,published=false):Post{const p=raw as Post;return {...p,status:published?'Published':p.status||'Draft',coverKey:p.coverKey||undefined,publishedAt:p.publishedAt||undefined};}
 export async function editorSession():Promise<boolean>{if(isCore)return core.coreSession();if(!isCloud)return true;try{await getCurrentUser();const s=await fetchAuthSession();const groups=s.tokens?.accessToken.payload['cognito:groups'];return Array.isArray(groups)&&groups.includes('Editors');}catch{return false;}}
 export async function adminSession():Promise<boolean>{if(isCore)return core.coreAdminSession();return editorSession();}
+export async function accountAdminSession():Promise<boolean>{if(isCore)return core.coreAccountAdminSession();return !isCloud;}
+export async function agentAdminSession():Promise<boolean>{if(isCore)return core.coreAgentAdminSession();return !isCloud;}
 export async function logout(){if(isCore)return core.coreLogout();if(isCloud)await signOut();}
 export async function listPosts(published=false):Promise<Post[]>{
   if(isCore)return core.coreList(published);
