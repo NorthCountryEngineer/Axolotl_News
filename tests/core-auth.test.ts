@@ -101,6 +101,30 @@ test('admin access requires live write and publish permissions, while an editor 
   assert.equal(h.calls.filter(call => call.url.endsWith('/session')).length, 9);
 });
 
+test('account administration uses only the explicit current server capability', async () => {
+  const h = harness();
+  assert.equal(await h.api.coreAccountAdminSession(), false);
+  assert.equal(h.calls.length, 0);
+  h.store.set('axolotl-core-tokens', JSON.stringify({ access_token: 'access', expires_at: Date.now() + 300000 }));
+  for (const canManageAccounts of [undefined, false, 'true', true]) {
+    h.respond(async () => ({ ok: true, json: async () => ({ permissions: ['posts-write', 'posts-publish'], canManageAccounts }) }));
+    assert.equal(await h.api.coreAccountAdminSession(), canManageAccounts === true);
+  }
+  h.respond(async () => ({ ok: false, json: async () => ({ error: 'Account access was revoked.' }) }));
+  await assert.rejects(h.api.coreAccountAdminSession(), /Account access was revoked/);
+});
+test('agent administration uses its own live server capability instead of publishing or account access', async () => {
+  const h = harness();
+  assert.equal(await h.api.coreAgentAdminSession(), false); assert.equal(h.calls.length, 0);
+  h.store.set('axolotl-core-tokens', JSON.stringify({ access_token: 'access', expires_at: Date.now() + 300000 }));
+  for (const canConfigureAgents of [undefined, false, 'true', true]) {
+    h.respond(async () => ({ ok: true, json: async () => ({ permissions: ['posts-write', 'posts-publish', 'accounts-manage'], canManageAccounts: true, canConfigureAgents }) }));
+    assert.equal(await h.api.coreAgentAdminSession(), canConfigureAgents === true);
+  }
+  h.respond(async () => ({ ok: false, json: async () => ({ error: 'Agent administration was revoked.' }) }));
+  await assert.rejects(h.api.coreAgentAdminSession(), /Agent administration was revoked/);
+});
+
 test('duplicate retries reuse the same target after a lost response and deletion calls the complete-content endpoint', async () => {
   const h = harness();
   h.store.set('axolotl-core-tokens', JSON.stringify({ access_token: 'access', expires_at: Date.now() + 300000 }));

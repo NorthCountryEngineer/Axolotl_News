@@ -1,5 +1,5 @@
 import defaults from '../../config/agent-framework.json';
-import type { AgentConfig, AgentContext, AgentSettings, SkillDefinition, WorkflowGraph } from './agent-types';
+import type { AgentConfig, AgentContext, AgentMode, AgentSettings, SkillDefinition, WorkflowGraph } from './agent-types';
 
 export const AGENT_SKILLS: SkillDefinition[] = [
   { id: 'media.inventory', name: 'Review selected media', description: 'List selected files and missing captions or image descriptions. Does not inspect pixels or audio.', paid: false },
@@ -9,6 +9,7 @@ export const AGENT_SKILLS: SkillDefinition[] = [
   { id: 'review.draft', name: 'Prepare draft suggestions', description: 'Prepare suggestions for the author to review. Never publishes or edits a draft automatically.', paid: false },
 ];
 const identifier = /^[a-z][a-z0-9_-]{0,63}$/;
+const subjectId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const skillIds = new Set(AGENT_SKILLS.map(skill => skill.id));
 const contexts = new Set(['post', 'media', 'message']);
 function check(condition: unknown, message: string): asserts condition { if (!condition) throw new Error(message); }
@@ -85,12 +86,16 @@ export function validateAgentConfig(value: unknown): AgentConfig {
   const modelIds = new Set(value.models.map(model => model.id)), agentIds = new Set(value.agents.map(agent => String(agent.id))), workflowIds = new Set(value.workflows.map(workflow => workflow.id));
   for (const agent of value.agents) { fields(agent, ['id', 'name', 'description', 'instructions', 'modelId', 'enabled']); text(agent.description, 500, 'Agent description'); text(agent.instructions, 4000, 'Agent instructions'); check(modelIds.has(agent.modelId), 'An agent references an unknown model.'); }
   for (const workflow of value.workflows) { fields(workflow, ['id', 'name', 'description', 'enabled', 'graph']); text(workflow.description, 500, 'Workflow description'); validateWorkflow(workflow.graph, agentIds); }
-  for (const mode of value.modes) { fields(mode, ['id', 'name', 'description', 'welcome', 'agentId', 'workflowId', 'enabled']); text(mode.description, 500, 'Mode description'); text(mode.welcome, 1000, 'Welcome message'); check(typeof mode.agentId === 'string' && agentIds.has(mode.agentId), 'A mode references an unknown agent.'); check(typeof mode.workflowId === 'string' && workflowIds.has(mode.workflowId), 'A mode references an unknown workflow.'); }
+  for (const mode of value.modes) {
+    fields(mode, ['id', 'name', 'description', 'welcome', 'agentId', 'workflowId', 'enabled'], ['audience']); text(mode.description, 500, 'Mode description'); text(mode.welcome, 1000, 'Welcome message'); check(typeof mode.agentId === 'string' && agentIds.has(mode.agentId), 'A mode references an unknown agent.'); check(typeof mode.workflowId === 'string' && workflowIds.has(mode.workflowId), 'A mode references an unknown workflow.');
+    if (mode.audience !== undefined) { object(mode.audience, 'Mode audience'); fields(mode.audience, ['allEditors', 'userIds']); check(typeof mode.audience.allEditors === 'boolean', 'Mode audience must choose all editors or selected accounts.'); const ids = mode.audience.userIds; check(Array.isArray(ids) && ids.length <= 100 && ids.every(id => typeof id === 'string' && subjectId.test(id)) && new Set(ids).size === ids.length, 'Select at most 100 unique Core account identifiers.'); }
+  }
   check(new TextEncoder().encode(JSON.stringify(value)).length <= 48000, 'Keep the assistant configuration under 48 KB.');
   return structuredClone(value) as unknown as AgentConfig;
 }
 
 export function defaultAgentSettings(): AgentSettings { return { config: validateAgentConfig(defaults), paidModelsAllowed: false, skills: structuredClone(AGENT_SKILLS) }; }
+export function modeAvailable(mode: AgentMode, subject: string): boolean { return !mode.audience || mode.audience.allEditors || mode.audience.userIds.includes(subject); }
 export function canonicalJSON(value: unknown): string {
   const ordered = (item: unknown): unknown => Array.isArray(item) ? item.map(ordered) : item !== null && typeof item === 'object' ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, nested]) => [key, ordered(nested)])) : item;
   return JSON.stringify(ordered(value));

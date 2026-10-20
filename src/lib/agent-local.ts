@@ -1,4 +1,4 @@
-import { AGENT_SKILLS, canonicalJSON, contextFingerprint, defaultAgentSettings, validateAgentConfig } from './agent-defaults';
+import { AGENT_SKILLS, canonicalJSON, contextFingerprint, defaultAgentSettings, modeAvailable, validateAgentConfig } from './agent-defaults';
 import type { AgentConfig, AgentContext, AgentDefinition, AgentSession, AgentSettings, AgentSuggestion, AgentTurn, WorkflowGraph } from './agent-types';
 import { parseDocument } from './model';
 
@@ -7,6 +7,7 @@ type LocalRecord = { session: AgentSession; context: AgentContext; snapshot: Age
 const configKey = 'axolotl-assistant-config-v1', sessionKey = (id: string) => `axolotl-assistant-session-v1:${id}`;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const now = () => new Date().toISOString();
+export const LOCAL_ASSISTANT_SUBJECT = '11111111-1111-4111-8111-111111111110';
 function ensureId(id: string) { if (!uuid.test(id)) throw new Error('Invalid conversation or request identifier.'); }
 function items(context: AgentContext) {
   const selected = new Set(context.mediaIds);
@@ -50,10 +51,10 @@ function binding(value: unknown, graph: WorkflowGraph, record: LocalRecord): unk
 
 /** Browser-only rehearsal. There is deliberately no model transport in this runtime. */
 export class LocalAgentRuntime {
-  constructor(private storage: StoragePort) {}
+  constructor(private storage: StoragePort, private subject = LOCAL_ASSISTANT_SUBJECT) {}
   settings(): AgentSettings {
     const stored = this.storage.getItem(configKey), config = stored ? validateAgentConfig(JSON.parse(stored)) : defaultAgentSettings().config;
-    return { config, paidModelsAllowed: false, skills: structuredClone(AGENT_SKILLS) };
+    return { config, paidModelsAllowed: false, skills: structuredClone(AGENT_SKILLS), availableModeIds: config.modes.filter(mode => mode.enabled && modeAvailable(mode, this.subject)).map(mode => mode.id) };
   }
   save(config: AgentConfig, expectedRevision: number): AgentSettings {
     const current = this.settings().config;
@@ -75,11 +76,11 @@ export class LocalAgentRuntime {
   delete(id: string) { ensureId(id); this.storage.removeItem(sessionKey(id)); }
   async create(id: string, postId: string, modeId: string, context: AgentContext): Promise<AgentSession> {
     ensureId(id); ensureId(postId); const snapshot = this.settings().config, fingerprint = await contextFingerprint(context);
+    if (!snapshot.enabled) throw new Error('The newsroom assistant is disabled.');
+    const mode = snapshot.modes.find(item => item.id === modeId && item.enabled && modeAvailable(item, this.subject));
+    if (!mode) throw new Error('This assistant mode is unavailable for your account.');
     const existing = this.storage.getItem(sessionKey(id));
     if (existing) { const record = JSON.parse(existing) as LocalRecord; if (record.session.postId !== postId || record.session.modeId !== modeId || record.session.contextFingerprint !== fingerprint) throw new Error('This conversation identifier is already in use.'); return record.session; }
-    if (!snapshot.enabled) throw new Error('The newsroom assistant is disabled.');
-    const mode = snapshot.modes.find(item => item.id === modeId && item.enabled);
-    if (!mode) throw new Error('This assistant mode is unavailable.');
     const doc = parseDocument(context.document), selected = new Set(context.mediaIds);
     if (context.document.length > 80000 || new TextEncoder().encode(canonicalJSON(context)).length > 110000) throw new Error('Use a smaller draft for an assistant conversation.');
     if (selected.size > 8 || selected.size !== context.mediaIds.length || [...selected].some(mediaId => !doc.blocks.some(block => block.id === mediaId && ['image', 'video'].includes(block.type)))) throw new Error('Select up to eight images and videos in this draft.');
@@ -88,15 +89,20 @@ export class LocalAgentRuntime {
   }
   turn(id: string, turn: AgentTurn): AgentSession {
     ensureId(turn.requestId); const record = this.read(id), session = record.session;
+    const current = this.settings().config, mode = record.snapshot.modes.find(item => item.id === session.modeId)!, currentMode = current.modes.find(item => item.id === mode.id);
+    if (!current.enabled || !currentMode?.enabled || !modeAvailable(currentMode, this.subject)) throw new Error('This assistant mode has been disabled or is unavailable for your account.');
+    if (currentMode.agentId !== mode.agentId || currentMode.workflowId !== mode.workflowId) throw new Error('This mode now uses a different agent or workflow. Start a new conversation.');
+    const previousWorkflow = record.snapshot.workflows.find(item => item.id === mode.workflowId), currentWorkflow = current.workflows.find(item => item.id === mode.workflowId);
+    if (!previousWorkflow || !currentWorkflow?.enabled) throw new Error('This workflow has been disabled.');
+    const bindings = (graph: WorkflowGraph) => graph.nodes.map(node => [node.id, node.skill, node.agent_id]);
+    if (canonicalJSON(bindings(previousWorkflow.graph)) !== canonicalJSON(bindings(currentWorkflow.graph))) throw new Error('This workflow uses different steps or agents. Start a new conversation.');
     const requestFingerprint = canonicalJSON({ ...turn, revision: undefined }), receipt = record.requests.find(request => request.id === turn.requestId);
     if (receipt) { if (receipt.fingerprint !== requestFingerprint) throw new Error('Request identifiers cannot be reused for different actions.'); return structuredClone(session); }
     if (session.revision !== turn.revision) throw new Error('The conversation changed. Reload it before continuing.');
     if (['running', 'uncertain', 'failed'].includes(session.status)) throw new Error('This conversation cannot run another step. Start a new conversation.');
-    const current = this.settings().config, mode = record.snapshot.modes.find(item => item.id === session.modeId)!;
-    if (!current.enabled || !current.modes.some(item => item.id === mode.id && item.enabled)) throw new Error('This assistant mode has been disabled.');
     const availableAgent = (agentId: string) => {
       const agent = record.snapshot.agents.find(item => item.id === agentId && item.enabled);
-      if (!agent || !current.agents.some(item => item.id === agentId && item.enabled)) throw new Error('This agent has been disabled.');
+      if (!agent || !current.agents.some(item => item.id === agentId && item.enabled && item.modelId === agent.modelId)) throw new Error('This agent has been disabled or changed. Start a new conversation.');
       const model = record.snapshot.models.find(item => item.id === agent.modelId && item.enabled);
       if (!model || !current.models.some(item => item.id === model.id && item.enabled && item.provider === model.provider && item.target === model.target)) throw new Error('This model has been disabled or changed. Start a new conversation.');
       if (model.provider !== 'local') throw new Error('Paid AI and media analysis do not run in local preview. Configure and explicitly enable the server-side provider after deployment.');

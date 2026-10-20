@@ -27,6 +27,7 @@ SKILLS = [
 SKILL_IDS = {skill['id'] for skill in SKILLS}
 IDENTIFIER = re.compile(r'^[a-z][a-z0-9_-]{0,63}$')
 BLOCK_ID = re.compile(r'^[a-zA-Z0-9_-]{1,80}$')
+SUBJECT_ID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 _providers = {}
 
 
@@ -179,9 +180,14 @@ def validate_config(value):
             if name in output_names or not isinstance(item['node_id'], str) or item['node_id'] not in ids: fail('Invalid workflow output.')
             output_names.add(name)
     for mode in value['modes']:
-        fields(mode, ('id', 'name', 'description', 'welcome', 'agentId', 'workflowId', 'enabled'))
+        fields(mode, ('id', 'name', 'description', 'welcome', 'agentId', 'workflowId', 'enabled'), ('audience',))
         text(mode['description'], 500, 'Description'); text(mode['welcome'], 1000, 'Welcome message')
         if not isinstance(mode['agentId'], str) or not isinstance(mode['workflowId'], str) or mode['agentId'] not in catalogs['agents'] or mode['workflowId'] not in catalogs['workflows']: fail('Mode refers to a missing agent or workflow.')
+        if 'audience' in mode:
+            audience = mode['audience']; fields(audience, ('allEditors', 'userIds')); enabled(audience['allEditors'])
+            ids = audience['userIds']
+            if not isinstance(ids, list) or len(ids) > 100 or any(not isinstance(subject, str) or not SUBJECT_ID.fullmatch(subject) for subject in ids) or len(ids) != len(set(ids)):
+                fail('Select at most 100 unique Core account identifiers for a mode.')
     if len(canonical(value).encode()) > 48000: fail('Agent configuration must be smaller than 48 KB.')
     return deepcopy(value)
 
@@ -234,8 +240,24 @@ def configuration(api):
     return json.loads(stored['payload']) if stored else defaults()
 
 
-def settings(api):
-    return {'config': configuration(api), 'paidModelsAllowed': os.environ.get('ALLOW_PAID_MODELS', '').lower() == 'true', 'skills': deepcopy(SKILLS)}
+def mode_access(mode, claims):
+    audience = mode.get('audience', {'allEditors': True, 'userIds': []})
+    return audience['allEditors'] or claims['sub'] in audience['userIds']
+
+
+def can_configure(claims):
+    permissions = claims.get('permissions', [])
+    return isinstance(permissions, list) and any(permission in permissions for permission in ('admin', 'agents-manage'))
+
+
+def settings(api, claims=None):
+    config = configuration(api)
+    if claims is not None and not can_configure(claims):
+        config = deepcopy(config)
+        config['modes'] = [mode for mode in config['modes'] if mode_access(mode, claims)]
+        for mode in config['modes']: mode.pop('audience', None)
+    return {'config': config, 'paidModelsAllowed': config['allowPaidExecution'], 'skills': deepcopy(SKILLS),
+        'availableModeIds': [mode['id'] for mode in config['modes'] if mode['enabled'] and (claims is None or mode_access(mode, claims))]}
 
 
 def put_configuration(api, body):
@@ -247,7 +269,8 @@ def put_configuration(api, body):
     if (int(current['revision']) if current else 0) != expected: fail('Agent settings changed. Reload before saving.', 409)
     config['revision'] = expected + 1
     save(api, scoped_key('config'), config, expected if current else None)
-    return {'config': config, 'paidModelsAllowed': os.environ.get('ALLOW_PAID_MODELS', '').lower() == 'true', 'skills': deepcopy(SKILLS)}
+    return {'config': config, 'paidModelsAllowed': config['allowPaidExecution'], 'skills': deepcopy(SKILLS),
+        'availableModeIds': [mode['id'] for mode in config['modes'] if mode['enabled']]}
 
 
 def catalog(config, key, item_id):
@@ -312,7 +335,7 @@ def create_session(api, claims, body):
     config = configuration(api)
     if not config['enabled']: fail('The newsroom assistant is disabled.', 403)
     mode = catalog(config, 'modes', body['modeId'])
-    if not mode or not mode['enabled']: fail('This assistant mode is unavailable.', 403)
+    if not mode or not mode['enabled'] or not mode_access(mode, claims): fail('This assistant mode is unavailable for your account.', 403)
     agent, workflow = catalog(config, 'agents', mode['agentId']), catalog(config, 'workflows', mode['workflowId'])
     if not agent or not agent['enabled'] or not workflow or not workflow['enabled']: fail('This mode needs an enabled agent and workflow.', 403)
     context = validate_context(api, pid, body['context'])
@@ -381,10 +404,12 @@ def resolve(value, state, node):
 def active_agent(state, current, agent_id):
     agent = catalog(state['_snapshot'], 'agents', agent_id)
     current_agent = catalog(current, 'agents', agent_id)
-    if not agent or not agent['enabled'] or not current_agent or not current_agent['enabled']: fail('This agent was disabled. Start a new session after updating settings.', 403)
+    if not agent or not agent['enabled'] or not current_agent or not current_agent['enabled'] or current_agent['modelId'] != agent['modelId']: fail('This agent was disabled or changed. Start a new session after updating settings.', 403)
     model = catalog(state['_snapshot'], 'models', agent['modelId'])
     current_model = catalog(current, 'models', agent['modelId'])
     if not model or not model['enabled'] or not current_model or not current_model['enabled'] or current_model['provider'] != model['provider'] or current_model['target'] != model['target']: fail('This model is unavailable or changed. Start a new session.', 403)
+    model = deepcopy(model)
+    model['maxOutputTokens'] = min(model['maxOutputTokens'], current_model['maxOutputTokens'])
     return agent, model
 
 
@@ -396,13 +421,22 @@ def provider(name):
 
 
 def paid_allowed(state, current, model):
-    if os.environ.get('ALLOW_PAID_MODELS', '').lower() != 'true' or not current['allowPaidExecution'] or not state['_snapshot']['allowPaidExecution']:
-        fail('Paid AI and machine learning are disabled. An administrator and the AWS deployment must both enable them.', 403)
+    if not current['allowPaidExecution']:
+        fail('Paid AI and media analysis are disabled in the saved administrator settings.', 403)
     if state['usage']['modelCalls'] >= min(current['limits']['maxModelCalls'], state['_snapshot']['limits']['maxModelCalls']): fail('The model call limit has been reached. No further provider calls will run.', 409)
-    if model['provider'] == 'bedrock':
-        allowed = {target.strip() for target in os.environ.get('BEDROCK_MODEL_ALLOWLIST', '').split(',') if target.strip()}
-        if model['target'] not in allowed: fail('This Bedrock target is not allowed by the deployment.', 403)
-    if model['provider'] == 'rekognition' and os.environ.get('REKOGNITION_ENABLED', '').lower() != 'true': fail('Media model execution is disabled in this deployment.', 403)
+
+
+def provider_failure_hint(error):
+    response = getattr(error, 'response', {})
+    details = response.get('Error', {}) if isinstance(response, dict) else {}
+    code = details.get('Code') if isinstance(details, dict) else None
+    return {
+        'AccessDeniedException': 'AWS denied provider access. An administrator should check this account’s model availability and the application role permissions.',
+        'AccessDenied': 'AWS denied provider access. An administrator should check this account’s model availability and the application role permissions.',
+        'ResourceNotFoundException': 'AWS could not find the selected model or media resource. Check the configured model target, region, and selected file.',
+        'ValidationException': 'AWS rejected the configured model target or selected media. Check the model ID, region, supported file format, and workflow inputs.',
+        'ThrottlingException': 'AWS is limiting provider requests. Review the session and wait before starting a new conversation; this operation will not retry automatically.',
+    }.get(code, '')
 
 
 def local_response(state, message):
@@ -617,16 +651,21 @@ def turn(api, claims, sid, body):
     if not isinstance(body['action'], str) or body['action'] not in {'message', 'workflow', 'advance'}: fail('Unknown assistant action.')
     state = load_session(api, claims, sid)
     request_fingerprint = hashlib.sha256(canonical({key: value for key, value in body.items() if key != 'revision'}).encode()).hexdigest()
+    current = configuration(api)
+    mode = catalog(current, 'modes', state['modeId'])
+    workflow = catalog(current, 'workflows', state['_workflow']['id'])
+    if not current['enabled'] or not mode or not mode['enabled'] or not mode_access(mode, claims) or not workflow or not workflow['enabled']: fail('This assistant mode or workflow is unavailable for your account.', 403)
+    if mode['agentId'] != state['_mode']['agentId'] or mode['workflowId'] != state['_mode']['workflowId']:
+        fail('This mode now uses a different agent or workflow. Start a new session.', 403)
+    old_bindings = [(node['id'], node['skill'], node['agent_id']) for node in state['_workflow']['graph']['nodes']]
+    current_bindings = [(node['id'], node['skill'], node['agent_id']) for node in workflow['graph']['nodes']]
+    if old_bindings != current_bindings: fail('This workflow uses different steps or agents. Start a new session.', 403)
     receipt = next((entry for entry in state['_requests'] if entry['id'] == request_id), None)
     if receipt:
         if receipt['fingerprint'] != request_fingerprint: fail('Request identifiers cannot be reused for different actions.', 409)
         return public(state)
     if state['revision'] != body['revision']: fail('This session changed. Reload it before continuing.', 409)
     if state.get('_inflight') or state['status'] in {'failed', 'uncertain'}: fail('The last operation is unresolved. It will not be replayed; start a new session to continue.', 409)
-    current = configuration(api)
-    mode = catalog(current, 'modes', state['modeId'])
-    workflow = catalog(current, 'workflows', state['_workflow']['id'])
-    if not current['enabled'] or not mode or not mode['enabled'] or not workflow or not workflow['enabled']: fail('This assistant mode or workflow was disabled.', 403)
     limit = lambda name: min(current['limits'][name], state['_snapshot']['limits'][name])
     if body['action'] == 'message' and state['_turnCount'] >= limit('maxTurns') or body['action'] == 'advance' and state['_stepCount'] >= limit('maxSteps'): fail('This session reached its action limit. Start a new session.', 409)
     if api.changing(api.get_post(state['postId'])): fail('The story is being changed or removed.', 409)
@@ -711,11 +750,14 @@ def turn(api, claims, sid, body):
             if waiting: state['status'] = 'waiting'
             elif all(entry['status'] == 'complete' for entry in state['steps']): state['status'] = 'review'
             else: state['status'] = 'ready'
-    except Exception:
+    except Exception as error:
         # A timeout or malformed provider response may follow a billed operation.
         # Keep the receipt and forbid retries instead of guessing whether it ran.
         state['status'] = 'uncertain' if paid else 'failed'
         state['error'] = 'The operation did not return a confirmed result. It will not be replayed. Review your media and start a new session if needed.' if paid else 'This workflow step could not complete. Check its configuration and start a new session.'
+        if paid:
+            hint = provider_failure_hint(error)
+            if hint: state['error'] += ' ' + hint
         if step is not None: step['status'] = state['status']
     state.pop('_inflight', None)
     previous = state['revision']; state['revision'] += 1; state['updatedAt'] = now()
@@ -724,10 +766,12 @@ def turn(api, claims, sid, body):
 
 
 def dispatch(api, event, method, path, body):
-    claims = api.authorize(event, 'posts-write', *(['posts-publish'] if path == '/assistant/config' and method == 'PUT' else []))
+    claims = api.authorize(event, 'posts-write')
     if path == '/assistant/config':
-        if method == 'GET': return settings(api)
-        if method == 'PUT': return put_configuration(api, body)
+        if method == 'GET': return settings(api, claims)
+        if method == 'PUT':
+            if not can_configure(claims): fail('Your Core account cannot configure newsroom agents or authorize model access.', 403)
+            return put_configuration(api, body)
     if path == '/assistant/sessions' and method == 'POST': return create_session(api, claims, body)
     match = re.fullmatch(r'/assistant/sessions/([^/]+)(/turn)?', path)
     if match:

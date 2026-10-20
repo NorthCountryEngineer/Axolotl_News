@@ -4,12 +4,16 @@
 
 Use the full [AWS deployment guide](../docs/AWS_DEPLOYMENT.md) for the two applications, DNS, database bootstrap, dedicated registration task and AWS resources. Core's `docs/external-applications.md` describes the generic external application contract and local registration alternative.
 
-The package declares `external_runtime: "aws-amplify"`, `/oauth/callback`, dependency `core-platform`, and two permissions on its own Core authorization service:
+The package declares `external_runtime: "aws-amplify"`, `/oauth/callback`, dependency `core-platform`, and four permissions on its own Core authorization service:
 
 - `posts-write`: read private drafts, create/edit drafts and upload draft media.
 - `posts-publish`: publish/unpublish and, together with `posts-write`, copy public media or remove posts/media.
+- `agents-manage`: configure assistant agents, models, modes and workflows; content publishers cannot enable paid execution.
+- `accounts-manage`: list application accounts and create/revoke invitation-only application access; publishing alone does not grant this permission.
 
-Readers remain anonymous. Give the author an ordinary Core organization membership and an editor role with the desired permissions plus the matching environment boundary tag. Core's catalog opens the public homepage; **Editor's desk** starts the PKCE sign-in flow. Organization administrators are not required for writing or publishing.
+Version 1.1.0 also publishes Editor, Publisher and Administrator `account_roles`. These grants are scoped to the registered application deployment. They never create Core organization administrators or organization-wide roles/access tags. See [Newsroom accounts](../docs/ACCOUNTS.md) for administrator use and release dependencies.
+
+Readers remain anonymous. New author invitations from **Editor’s desk → Accounts** create an ordinary Core membership with the selected app-specific Editor, Publisher or Administrator access. These app accounts satisfy only their own registered application boundary and need no manual organization-wide environment tag. Existing manually assigned Core roles and grants continue to work. Core’s catalog opens the public homepage; **Editor’s desk** starts the PKCE sign-in flow. Organization administrators are not required for writing or publishing.
 
 Register `https://axolotl.news` as the production origin. Core creates a public browser client with that exact origin and callback, and a separate confidential resource client scoped to the same installation/environment. The origin and client placement become immutable. Deploy a separate staging environment/registration when a second authenticated hostname is needed.
 
@@ -37,4 +41,4 @@ This writes nonsecret `nce-config.json` containing issuer, organization/service 
 
 The browser uses authorization-code PKCE `S256` with `state` and scope `openid authorization`. It sends opaque Core access tokens to the API. The ID token is discarded. Every protected API request uses server-side Core introspection and checks current permissions; a stale role or disabled membership cannot continue editing. Public content uses a separate DynamoDB table and published S3 revision keys.
 
-The implementation and package are complete locally. The deployment guide's AWS, SSM, database, registration and DNS steps are future operator actions: no paid resource was provisioned and no live organization was registered during development.
+Axolotl News is already deployed at `https://axolotl.news`. Apply this package’s identity upgrade to that existing installation before releasing account management; retain its current clients, credential parameter, origin and environment. Account creation and invitations perform no infrastructure deployment.

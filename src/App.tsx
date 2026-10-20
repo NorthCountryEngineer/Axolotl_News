@@ -4,7 +4,7 @@ import { Login } from './components/Login';
 import { Studio } from './components/Studio';
 import { useConfirm } from './components/Confirm';
 import { DocumentView, Media } from './components/Document';
-import { adminSession, deletePost, duplicatePost, editorSession, isCloud, listPosts, logout } from './lib/api';
+import { accountAdminSession, agentAdminSession, adminSession, deletePost, duplicatePost, editorSession, isCloud, listPosts, logout } from './lib/api';
 import { parseDocument, type Post } from './lib/model';
 import { completeCoreLogin, coreConfig, isCore } from './lib/core';
 import { StoryVideo } from './components/StoryVideo';
@@ -41,6 +41,7 @@ export default function App(){
   const confirm=useConfirm();
   const [path,setPath]=useState(readPath),[posts,setPosts]=useState<Post[]>([]),[error,setError]=useState(''),[loading,setLoading]=useState(true),[signed,setSigned]=useState(false),[dirty,setDirty]=useState(false);
   const [adminAllowed,setAdminAllowed]=useState(false),[adminMode,setAdminMode]=useState(false),[checkingAdmin,setCheckingAdmin]=useState(false);
+  const [canManageAccounts,setCanManageAccounts]=useState(false),[canConfigureAgents,setCanConfigureAgents]=useState(false);
   const [actionBusy,setActionBusy]=useState(false),[actionError,setActionError]=useState(''),[actionNotice,setActionNotice]=useState('');
   const [failedDelete,setFailedDelete]=useState<Post>();
   const operation=useRef(false);
@@ -58,13 +59,13 @@ export default function App(){
         if(!active)return;
         setSigned(isCloud?session:false);
         if(isCloud&&session){
-          const allowed=await adminSession().catch(()=>false);
-          if(active)setAdminAllowed(allowed);
+          const [allowed,accountsAllowed,agentsAllowed]=await Promise.all([adminSession().catch(()=>false),accountAdminSession().catch(()=>false),agentAdminSession().catch(()=>false)]);
+          if(active){setAdminAllowed(allowed);setCanManageAccounts(accountsAllowed);setCanConfigureAgents(agentsAllowed);}
         }
         if(returningFromCore&&active)setPath('/studio');
       }catch(e){
         if(!active)return;
-        setSigned(false);setAdminAllowed(false);setAdminMode(false);
+        setSigned(false);setAdminAllowed(false);setAdminMode(false);setCanManageAccounts(false);setCanConfigureAgents(false);
         if(returningFromCore){history.replaceState({},'','/studio');setPath('/studio');}
         setLoginError((e as Error).message);
       }finally{if(active)setCheckingLogin(false);}
@@ -74,7 +75,7 @@ export default function App(){
   useEffect(()=>{
     if(!signed)return;
     let active=true;
-    const verify=()=>{void adminSession().then(allowed=>{if(active){setAdminAllowed(allowed);if(!allowed)setAdminMode(false);}}).catch(()=>{if(active){setAdminAllowed(false);setAdminMode(false);}});};
+    const verify=()=>{void Promise.all([adminSession(),accountAdminSession(),agentAdminSession()]).then(([allowed,accountsAllowed,agentsAllowed])=>{if(active){setAdminAllowed(allowed);setCanManageAccounts(accountsAllowed);setCanConfigureAgents(agentsAllowed);if(!allowed)setAdminMode(false);}}).catch(()=>{if(active){setAdminAllowed(false);setAdminMode(false);setCanManageAccounts(false);setCanConfigureAgents(false);}});};
     window.addEventListener('focus',verify);
     return()=>{active=false;window.removeEventListener('focus',verify);};
   },[signed]);
@@ -83,7 +84,7 @@ export default function App(){
   useEffect(()=>{reload();},[reload]);
   useEffect(()=>{const pop=async()=>{if(dirty&&!await confirm('Leave this draft without saving?')){history.pushState({},'',path);return;}setPath(readPath());setDirty(false);window.scrollTo(0,0);};window.addEventListener('popstate',pop);const unload=(e:BeforeUnloadEvent)=>{if(dirty){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',unload);return()=>{window.removeEventListener('popstate',pop);window.removeEventListener('beforeunload',unload);};},[dirty,path,confirm]);
   async function navigate(next:string){if(next!==path&&dirty&&!await confirm('Leave this draft without saving?'))return;if(next!==path){history.pushState({},'',next);setPath(next);setDirty(false);window.scrollTo(0,0);}}
-  async function login(){setSigned(true);setLoginError('');setAdminAllowed(await adminSession().catch(()=>false));}
+  async function login(){setSigned(true);setLoginError('');const [allowed,accountsAllowed,agentsAllowed]=await Promise.all([adminSession().catch(()=>false),accountAdminSession().catch(()=>false),agentAdminSession().catch(()=>false)]);setAdminAllowed(allowed);setCanManageAccounts(accountsAllowed);setCanConfigureAgents(agentsAllowed);}
   async function toggleAdmin(){
     if(adminMode){setAdminMode(false);return;}
     setCheckingAdmin(true);setActionError('');
@@ -93,7 +94,7 @@ export default function App(){
   }
   async function signOut(){
     if(dirty&&!await confirm('Sign out without saving your draft?'))return;
-    await logout();setDirty(false);setSigned(false);setAdminAllowed(false);setAdminMode(false);setFailedDelete(undefined);setActionError('');setLoginError('');history.pushState({},'','/');setPath('/');window.scrollTo(0,0);
+    await logout();setDirty(false);setSigned(false);setAdminAllowed(false);setAdminMode(false);setCanManageAccounts(false);setCanConfigureAgents(false);setFailedDelete(undefined);setActionError('');setLoginError('');history.pushState({},'','/');setPath('/');window.scrollTo(0,0);
   }
   async function actOnPost(action:ContentAction,post:Post){
     if(!signed||!adminAllowed||!adminMode||operation.current)return;
@@ -114,5 +115,5 @@ export default function App(){
   const studio=pathname==='/studio'||checkingLogin;
   const id=pathname.startsWith('/posts/')?pathname.split('/').pop():undefined;
   const controls={enabled:signed&&adminAllowed&&adminMode,busy:actionBusy,onAction:actOnPost};
-  return <><Header navigate={navigate} studio={studio} signed={signed} adminAllowed={adminAllowed} adminMode={adminMode} checkingAdmin={checkingAdmin} onToggleAdmin={toggleAdmin} onLogout={signOut}/>{!isCloud&&<div className="local-banner"><span>LOCAL PREVIEW</span> No AWS connection. Creations stay in this browser.</div>}{controls.enabled&&<div className="admin-mode-strip" role="status">Admin actions are on. Use an item’s … menu to update, duplicate, or delete it.</div>}{accountNotice&&<div className="account-notice" role="status"><p>Your shared account is ready. Ask your parent to grant newsroom access, then sign in from the Editor’s desk.</p><button className="text-button" onClick={()=>setAccountNotice(false)} aria-label="Dismiss account notice">Dismiss</button></div>}{loginError&&<p className="error" role="alert">{loginError}</p>}{actionError&&<div className="content-action-message error" role="alert"><p>{actionError}</p>{failedDelete&&controls.enabled&&<button className="button secondary" disabled={actionBusy} onClick={()=>void actOnPost('delete',failedDelete)}>Retry deleting {failedDelete.title}</button>}</div>}{actionNotice&&<p className="content-action-message" role="status">{actionNotice}</p>}{checkingLogin?<main id="main" className="login-page"><p role="status">Finishing Core sign-in…</p></main>:studio?signed?<Studio onChanged={reload} onDirty={onDirty} adminMode={controls.enabled} canConfigureAgents={signed&&adminAllowed} initialPostId={query.get('post')||undefined} initialBlockId={query.get('block')||undefined}/>:<Login onLogin={()=>void login()}/>:id?<Article loading={loading} post={posts.find(p=>p.id===id)} navigate={navigate} controls={controls}/>:<Home posts={posts} navigate={navigate} error={error} loading={loading} controls={controls}/>}{!studio&&<footer className="site-footer"><a className="brand" href="/" onClick={e=>{e.preventDefault();void navigate('/');}}><img src="/assets/axolotl-mark.svg" alt=""/><span>axolotl.news</span></a><p>Made with curiosity, creativity, and a whole lotl of love.</p><button onClick={()=>void navigate('/studio')} className="text-button">Editor’s desk ↗</button></footer>}</>;
+  return <><Header navigate={navigate} studio={studio} signed={signed} adminAllowed={adminAllowed} adminMode={adminMode} checkingAdmin={checkingAdmin} onToggleAdmin={toggleAdmin} onLogout={signOut}/>{!isCloud&&<div className="local-banner"><span>LOCAL PREVIEW</span> No AWS connection. Creations stay in this browser.</div>}{controls.enabled&&<div className="admin-mode-strip" role="status">Admin actions are on. Use an item’s … menu to update, duplicate, or delete it.</div>}{accountNotice&&<div className="account-notice" role="status"><p>Your shared Core account is ready. Sign in from the Editor’s desk to use your assigned newsroom access.</p><button className="text-button" onClick={()=>setAccountNotice(false)} aria-label="Dismiss account notice">Dismiss</button></div>}{loginError&&<p className="error" role="alert">{loginError}</p>}{actionError&&<div className="content-action-message error" role="alert"><p>{actionError}</p>{failedDelete&&controls.enabled&&<button className="button secondary" disabled={actionBusy} onClick={()=>void actOnPost('delete',failedDelete)}>Retry deleting {failedDelete.title}</button>}</div>}{actionNotice&&<p className="content-action-message" role="status">{actionNotice}</p>}{checkingLogin?<main id="main" className="login-page"><p role="status">Finishing Core sign-in…</p></main>:studio?signed?<Studio onChanged={reload} onDirty={onDirty} adminMode={controls.enabled} canConfigureAgents={signed&&canConfigureAgents} canManageAccounts={signed&&canManageAccounts} initialPostId={query.get('post')||undefined} initialBlockId={query.get('block')||undefined}/>:<Login onLogin={()=>void login()}/>:id?<Article loading={loading} post={posts.find(p=>p.id===id)} navigate={navigate} controls={controls}/>:<Home posts={posts} navigate={navigate} error={error} loading={loading} controls={controls}/>}{!studio&&<footer className="site-footer"><a className="brand" href="/" onClick={e=>{e.preventDefault();void navigate('/');}}><img src="/assets/axolotl-mark.svg" alt=""/><span>axolotl.news</span></a><p>Made with curiosity, creativity, and a whole lotl of love.</p><button onClick={()=>void navigate('/studio')} className="text-button">Editor’s desk ↗</button></footer>}</>;
 }

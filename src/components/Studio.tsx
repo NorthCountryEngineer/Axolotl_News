@@ -8,6 +8,7 @@ import { ItemActions } from './ItemActions';
 import { AgentAdministration, AgentWorkspace } from './AgentWorkspace';
 import { applyAgentSuggestion } from '../lib/agent-draft';
 import type { AgentSuggestion } from '../lib/agent-types';
+import { AccountAdministration } from './AccountAdministration';
 const textBlock=(text='Write something wonderful…'):Block=>({id:crypto.randomUUID(),type:'text',nodes:[{tag:'p',children:[{tag:'#text',text}]}]});
 function makePost(template='Story'):Post{
   let d=emptyDocument();let title='';let category='Stories';
@@ -16,9 +17,10 @@ function makePost(template='Story'):Post{
   if(template==='Presentation'){title='The Axolotl';category='Presentation';d={...d,blocks:[textBlock('Upload the PNG slides from Canva in order using Add files. Or attach the original PDF. Remove this text block when you are ready.')]};}
   return {id:crypto.randomUUID(),title,slug:slugify(title),excerpt:'',category,document:JSON.stringify(d),status:'Draft'};
 }
-export function Studio({onChanged,onDirty,adminMode,canConfigureAgents=false,initialPostId,initialBlockId}:{onChanged:()=>void;onDirty:(dirty:boolean)=>void;adminMode:boolean;canConfigureAgents?:boolean;initialPostId?:string;initialBlockId?:string}){
+export function Studio({onChanged,onDirty,adminMode,canConfigureAgents=false,canManageAccounts=false,initialPostId,initialBlockId}:{onChanged:()=>void;onDirty:(dirty:boolean)=>void;adminMode:boolean;canConfigureAgents?:boolean;canManageAccounts?:boolean;initialPostId?:string;initialBlockId?:string}){
   const confirm=useConfirm();
   const [assistantOpen,setAssistantOpen]=useState(false),[assistantAdmin,setAssistantAdmin]=useState(false),[offerAssistant,setOfferAssistant]=useState(true);
+  const [accountAdmin,setAccountAdmin]=useState(false);
   const [posts,setPosts]=useState<Post[]>([]),[post,setPost]=useState<Post>(()=>makePost()),[doc,setDoc]=useState<StoryDocument>(()=>parseDocument(post.document)),[selected,setSelected]=useState<string>(()=>doc.blocks[0].id),[preview,setPreview]=useState(false),[busy,setBusy]=useState(false),[status,setStatus]=useState('Your story starts here.'),[error,setError]=useState(''),[dirty,setDirty]=useState(false),[newMenu,setNewMenu]=useState(false),[progress,setProgress]=useState<number|null>(null),[liveIds,setLiveIds]=useState<Set<string>>(new Set());
   const uploadRef=useRef<HTMLInputElement>(null),importRef=useRef<HTMLInputElement>(null),titleRef=useRef<HTMLInputElement>(null),mediaDetailsRef=useRef<HTMLDivElement>(null),blockRefs=useRef(new Map<string,HTMLDivElement>()),busyRef=useRef(false);
   useEffect(()=>{let active=true;void refresh().then(drafts=>{if(!active||!initialPostId)return;const requested=drafts?.find(p=>p.id===initialPostId);if(requested)void open(requested,initialBlockId);else setError('This creation could not be found. It may have been deleted.');});return()=>{active=false;};},[initialPostId,initialBlockId]);
@@ -63,6 +65,7 @@ export function Studio({onChanged,onDirty,adminMode,canConfigureAgents=false,ini
     <div className="draft-list">{posts.map(p=><div className="draft-row" key={p.id}><button disabled={busy} className={`draft-item ${p.id===post.id?'active':''}`} onClick={()=>open(p)}><span className={`status-dot ${liveIds.has(p.id)?'live':''}`}/><strong>{p.title||'Untitled story'}</strong><small>{p.adminState==='copying'?'Copy incomplete':p.adminState==='deleting'?'Deletion unfinished':liveIds.has(p.id)?'Published':'Draft'} · {p.category}</small></button>{adminMode&&<ItemActions label={p.title||'Untitled story'} disabled={busy} onUpdate={()=>updatePost(p)} onDuplicate={()=>copyPost(p)} onDelete={()=>removePost(p)}/>}</div>)}{!posts.length&&<p className="sidebar-empty">A story, a fun fact, a whole newsletter… make your first creation.</p>}</div>
     <button className="text-button" disabled={busy} onClick={()=>importRef.current?.click()}>↑ Import text draft</button><input hidden ref={importRef} type="file" accept="application/json,.json" onChange={e=>void importPost(e.target.files?.[0])}/>
     {canConfigureAgents&&<button className="text-button" disabled={busy} onClick={()=>setAssistantAdmin(true)}>Agent settings</button>}
+    {canManageAccounts&&<button className="text-button" disabled={busy} onClick={()=>setAccountAdmin(true)}>Accounts</button>}
     <div className="studio-tip"><span>✎</span><strong>Small tip, big ideas</strong><p>Start with a sentence. Add a picture. Make it yours.</p></div>
   </aside><section className="editor-area"><div className="editor-topbar"><div><span className={`status-dot ${dirty?'':'live'}`}/><span role="status">{progress!==null?`${status} ${progress}%`:status}</span></div><div className="editor-actions"><button className="button subtle" disabled={busy} onClick={()=>setPreview(!preview)}>{preview?'✎ Edit':'◉ Preview'}</button><button className="button secondary" disabled={busy} onClick={()=>void save()}>Save draft</button><button className="button primary" disabled={busy} onClick={()=>void publish()}>{busy?'Working…':liveIds.has(post.id)?'Update live post ↗':'Publish ↗'}</button></div></div>
     {error&&<div className="error editor-error" role="alert">{error}</div>}
@@ -70,6 +73,7 @@ export function Studio({onChanged,onDirty,adminMode,canConfigureAgents=false,ini
     {!offerAssistant&&!assistantOpen&&<div className="assistant-reopen"><button className="text-button" disabled={busy} onClick={()=>setAssistantOpen(true)}>Talk to an agent</button></div>}
     {assistantOpen&&<AgentWorkspace key={post.id} post={current()} onApply={applySuggestion} onClose={()=>{setAssistantOpen(false);setOfferAssistant(false);}} canConfigure={canConfigureAgents} busy={busy}/>}
     {assistantAdmin&&canConfigureAgents&&<AgentAdministration onClose={()=>setAssistantAdmin(false)}/>}
+    {accountAdmin&&canManageAccounts&&<AccountAdministration onClose={()=>setAccountAdmin(false)}/>}
     <div className="editor-options"><label>Format<select disabled={busy} value={doc.layout} onChange={e=>changeDoc({...doc,layout:e.target.value as StoryDocument['layout']})}><option value="story">Story</option><option value="newsletter">Newsletter</option></select></label><div className="theme-chooser"><span>Paper</span>{(['cream','pink','green'] as const).map(t=><button className={`swatch ${t} ${doc.theme===t?'selected':''}`} aria-label={`${t} paper`} aria-pressed={doc.theme===t} key={t} disabled={busy} onClick={()=>changeDoc({...doc,theme:t})}/>)}</div><button className="text-button" disabled={busy} onClick={exportPost}>↓ Export draft</button></div>
     <fieldset disabled={busy} aria-label="Post canvas" className={`editor-canvas theme-${doc.theme} ${busy?'busy':''}`}><div className="canvas-masthead"><img src="/assets/axolotl-mark.svg" alt=""/>AXOLOTL NEWS<span>MADE WITH CURIOSITY</span></div>
       {preview?<><span className="eyebrow">{post.category}</span><h1 className="preview-title">{post.title||'Your wonderful title'}</h1><p className="preview-excerpt">{post.excerpt}</p><DocumentView value={JSON.stringify(doc)}/></>:<>

@@ -32,50 +32,33 @@ test('assistant state stays private, encrypted and retained independently of pub
   assert.ok(policy.PolicyDocument.Statement[0].Action.every((action: string) => /^dynamodb:(GetItem|PutItem|UpdateItem|DeleteItem)$/.test(action)));
 });
 
-function paidPolicies(overrides: Record<string, string> = {}) {
-  const parameters = Object.fromEntries(Object.entries(template.Parameters).map(([key, value]: [string, any]) => [key, value.Default]));
-  Object.assign(parameters, overrides);
-  function check(value: any): any {
-    if (!value || typeof value !== 'object') return value;
-    if (value.Ref) return parameters[value.Ref];
-    if (value.Condition) return check(template.Conditions[value.Condition]);
-    if (value['Fn::Equals']) { const [left, right] = value['Fn::Equals'].map(check); return left === right; }
-    if (value['Fn::Not']) return !check(value['Fn::Not'][0]);
-    if (value['Fn::And']) return value['Fn::And'].every(check);
-    throw new Error('Unsupported condition in infrastructure contract');
-  }
-  return r.ApiRole.Properties.Policies.filter((policy: any) => policy['Fn::If'] && check(template.Conditions[policy['Fn::If'][0]]))
-    .map((policy: any) => policy['Fn::If'][1]);
-}
-
-test('paid inference permissions require explicit operator gates and exact Bedrock resources', () => {
-  assert.equal(template.Parameters.AllowPaidModels.Default, 'false');
-  assert.equal(template.Parameters.EnableMediaModels.Default, 'false');
-  assert.equal(template.Parameters.BedrockModelAllowlist.Default, '');
-  assert.equal(template.Parameters.BedrockResourceArns.Default, '');
-  assert.deepEqual(paidPolicies(), []);
-  assert.deepEqual(paidPolicies({ AllowPaidModels: 'true' }), []);
-  assert.deepEqual(paidPolicies({ AllowPaidModels: 'true', BedrockModelAllowlist: 'approved.model-v1' }), []);
-  const resource = 'arn:aws:bedrock:us-east-1::foundation-model/approved.model-v1';
-  const enabled = paidPolicies({ AllowPaidModels: 'true', BedrockModelAllowlist: 'approved.model-v1', BedrockResourceArns: resource });
-  assert.equal(enabled.length, 1);
-  assert.equal(enabled[0].PolicyDocument.Statement[0].Action, 'bedrock:InvokeModel');
-  assert.deepEqual(enabled[0].PolicyDocument.Statement[0].Resource, { 'Fn::Split': [',', { Ref: 'BedrockResourceArns' }] });
-  for (const parameter of ['BedrockModelAllowlist', 'BedrockResourceArns']) {
-    const pattern = new RegExp(template.Parameters[parameter].AllowedPattern);
-    assert.equal(pattern.test('*'), false);
-    assert.equal(pattern.test(`${resource}*`), false);
-    assert.equal(pattern.test('arn:aws:bedrock:*::foundation-model/*'), false);
-  }
+test('admin model authorization requires no independent deployment switch', () => {
+  for (const name of ['AllowPaidModels', 'EnableMediaModels', 'BedrockModelAllowlist', 'BedrockResourceArns']) assert.ok(!template.Parameters[name]);
+  for (const name of ['ALLOW_PAID_MODELS', 'REKOGNITION_ENABLED', 'BEDROCK_MODEL_ALLOWLIST']) assert.ok(!(name in r.ApiFunction.Properties.Environment.Variables));
+  const defaults = JSON.parse(readFileSync(new URL('../config/agent-framework.json', import.meta.url), 'utf8'));
+  assert.equal(defaults.allowPaidExecution, false);
 });
 
-test('media inference grants only regional label detection after both operator opt-ins', () => {
-  assert.deepEqual(paidPolicies({ EnableMediaModels: 'true' }), []);
-  const enabled = paidPolicies({ AllowPaidModels: 'true', EnableMediaModels: 'true' });
-  assert.equal(enabled.length, 1);
-  const statement = enabled[0].PolicyDocument.Statement[0];
+test('configured Bedrock models have invocation capability without infrastructure or subscription authority', () => {
+  const policy = r.ApiRole.Properties.Policies.find((item: any) => item.PolicyName === 'AdminConfiguredBedrockModels');
+  assert.ok(policy && !policy.Condition && !policy['Fn::If']);
+  const statement = policy.PolicyDocument.Statement[0];
+  assert.deepEqual(statement.Action, ['bedrock:InvokeModel']);
+  const resources: string[] = statement.Resource.map((item: any) => item['Fn::Sub']);
+  assert.ok(resources.every(resource => /^arn:\$\{AWS::Partition\}:bedrock:(\$\{AWS::Region\}|us-east-2|us-west-2):/.test(resource)));
+  assert.ok(resources.every(resource => /::foundation-model\/\*$|:\$\{AWS::AccountId\}:(application-)?inference-profile\/\*$/.test(resource)));
+  const lookup = policy.PolicyDocument.Statement[1];
+  assert.deepEqual(lookup.Action, ['bedrock:GetInferenceProfile']);
+  assert.ok(lookup.Resource.length > 0);
+  assert.ok(lookup.Resource.every((item: any) => item['Fn::Sub'].includes(':${AWS::Region}:${AWS::AccountId}:') && item['Fn::Sub'].includes('inference-profile/')));
+  assert.ok(!JSON.stringify(policy).match(/PassRole|marketplace|Create|Delete|Update|FullAccess|InvokeTool|ApplyGuardrail/));
+});
+
+test('admin-configured media workflows have only regional label detection capability', () => {
+  const policy = r.ApiRole.Properties.Policies.find((item: any) => item.PolicyName === 'AdminConfiguredMediaLabels');
+  const statement = policy.PolicyDocument.Statement[0];
   assert.deepEqual(statement.Action, ['rekognition:DetectLabels', 'rekognition:StartLabelDetection', 'rekognition:GetLabelDetection']);
-  assert.equal(statement.Resource, '*'); // These three operations do not support resource-level IAM ARNs.
+  assert.equal(statement.Resource, '*'); // Label detection does not support resource-level IAM ARNs.
   assert.deepEqual(statement.Condition, { StringEquals: { 'aws:RequestedRegion': { Ref: 'AWS::Region' } } });
-  assert.ok(!JSON.stringify(enabled).includes('PassRole'));
+  assert.ok(!JSON.stringify(policy).match(/PassRole|Training|Face|Project|Collection/));
 });
