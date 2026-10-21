@@ -1,8 +1,8 @@
 {
   "slug": "axolotl-news",
   "name": "Axolotl News",
-  "version": "1.1.0",
-  "description": "An AWS-native family axolotl publication with a visual editor, image/video/PDF uploads, newsletters, invitation-only Core login, live editing and publishing permissions, and anonymous public reading. Hosting is managed in AWS Amplify; installing this package registers Core identity and does not deploy infrastructure.",
+  "version": "1.2.0",
+  "description": "A family axolotl newsroom and 2D arcade with visual publishing, uploads, private conversational game design and playtests, Core login, and administrator controls. Hosting is managed in AWS Amplify; installing this package registers identity and does not deploy infrastructure.",
   "kind": "application",
   "manifest": {
     "external_runtime": "aws-amplify",
@@ -14,11 +14,11 @@
     "permissions": [
       {
         "codename": "posts-write",
-        "name": "Create and edit posts"
+        "name": "Create and edit posts and games"
       },
       {
         "codename": "posts-publish",
-        "name": "Publish and unpublish posts"
+        "name": "Publish and manage posts and games"
       },
       {
         "codename": "accounts-manage",
@@ -26,14 +26,14 @@
       },
       {
         "codename": "agents-manage",
-        "name": "Configure Axolotl News agents, models, and workflows"
+        "name": "Configure agents, workflows, and game creation"
       }
     ],
     "account_roles": [
       {
         "id": "editor",
         "name": "Editor",
-        "description": "Create and edit stories and use configured assistants.",
+        "description": "Create and edit stories and private games, and use configured assistants.",
         "permissions": [
           "posts-write"
         ]
@@ -41,7 +41,7 @@
       {
         "id": "publisher",
         "name": "Publisher",
-        "description": "Edit, publish, duplicate, and remove newsroom content.",
+        "description": "Edit, playtest, publish, duplicate, and remove newsroom content and games.",
         "permissions": [
           "posts-write",
           "posts-publish"
@@ -50,7 +50,7 @@
       {
         "id": "administrator",
         "name": "Administrator",
-        "description": "Manage newsroom content, assistants, accounts, and invitations.",
+        "description": "Manage newsroom content, game creation, assistants, accounts, and invitations.",
         "permissions": [
           "posts-write",
           "posts-publish",

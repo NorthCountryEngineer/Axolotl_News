@@ -88,3 +88,7 @@ Tests cover document sanitization, Core PKCE/callback/refresh behavior, live aut
 An optional independent Cognito/AppSync/Amplify Gen 2 variant remains in `amplify/`, with [standalone instructions](docs/DEPLOYMENT.md). Select one backend mode deliberately; the Core deployment does not provision that additional backend.
 
 Dependencies are locked to versions available in the original local cache. No online vulnerability audit ran under the internet restriction. Review and update dependencies before production. Fun facts are adapted from [San Diego Zoo Wildlife Alliance](https://animals.sandiegozoo.org/animals/axolotl).
+
+## 2D game studio
+
+The Games section supports private conversational design, isolated playtests and versioned publication of collecting, dodging and platform games. Existing Editors create drafts, Publishers approve tested games, and administrators can pause creation without interrupting published games. See [Game studio](docs/GAME_STUDIO.md) for controls, permissions, storage and validation instructions.

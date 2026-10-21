@@ -7,6 +7,7 @@ build.mkdir(parents=True, exist_ok=True)
 with ZipFile(build / 'axolotl-api.zip', 'w', ZIP_DEFLATED) as archive:
     archive.write(root / 'backend/nce_api/handler.py', 'handler.py')
     archive.write(root / 'backend/nce_api/accounts.py', 'accounts.py')
+    archive.write(root / 'backend/nce_api/games.py', 'games.py')
     archive.write(root / 'backend/nce_api/agent_framework.py', 'agent_framework.py')
     archive.write(root / 'config/agent-framework.json', 'agent-framework.json')
 print(build / 'axolotl-api.zip')

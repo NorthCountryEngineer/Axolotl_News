@@ -17,7 +17,7 @@ function makePost(template='Story'):Post{
   if(template==='Presentation'){title='The Axolotl';category='Presentation';d={...d,blocks:[textBlock('Upload the PNG slides from Canva in order using Add files. Or attach the original PDF. Remove this text block when you are ready.')]};}
   return {id:crypto.randomUUID(),title,slug:slugify(title),excerpt:'',category,document:JSON.stringify(d),status:'Draft'};
 }
-export function Studio({onChanged,onDirty,adminMode,canConfigureAgents=false,canManageAccounts=false,initialPostId,initialBlockId}:{onChanged:()=>void;onDirty:(dirty:boolean)=>void;adminMode:boolean;canConfigureAgents?:boolean;canManageAccounts?:boolean;initialPostId?:string;initialBlockId?:string}){
+export function Studio({onChanged,onDirty,onCreateGame,adminMode,canConfigureAgents=false,canManageAccounts=false,initialPostId,initialBlockId}:{onChanged:()=>void;onDirty:(dirty:boolean)=>void;onCreateGame?:()=>void;adminMode:boolean;canConfigureAgents?:boolean;canManageAccounts?:boolean;initialPostId?:string;initialBlockId?:string}){
   const confirm=useConfirm();
   const [assistantOpen,setAssistantOpen]=useState(false),[assistantAdmin,setAssistantAdmin]=useState(false),[offerAssistant,setOfferAssistant]=useState(true);
   const [accountAdmin,setAccountAdmin]=useState(false);
@@ -60,7 +60,8 @@ export function Studio({onChanged,onDirty,adminMode,canConfigureAgents=false,can
   const chosen=doc.blocks.find(b=>b.id===selected);
   return <main className="studio"><aside className="draft-sidebar"><div className="sidebar-heading"><span className="eyebrow">YOUR NEWSROOM</span><h1>Editor’s desk<span>✦</span></h1></div>
     <button className="button primary" disabled={busy} onClick={()=>setNewMenu(!newMenu)}>＋ New creation</button>
-    {newMenu&&<div className="template-menu">{['Story','Newsletter','Fun fact','Presentation'].map(t=><button key={t} disabled={busy} onClick={()=>newPost(t)}>{t}<span>→</span></button>)}<button disabled={busy} onClick={()=>newPost('Story',true)}>Create with an agent<span>→</span></button></div>}
+    {onCreateGame&&<button className="text-button" disabled={busy} onClick={onCreateGame}>✦ Game studio</button>}
+    {newMenu&&<div className="template-menu">{onCreateGame&&<button disabled={busy} onClick={onCreateGame}>2D game<span>→</span></button>}{['Story','Newsletter','Fun fact','Presentation'].map(t=><button key={t} disabled={busy} onClick={()=>newPost(t)}>{t}<span>→</span></button>)}<button disabled={busy} onClick={()=>newPost('Story',true)}>Create with an agent<span>→</span></button></div>}
     <div className="draft-count">YOUR CREATIONS <span>{posts.length}</span></div>
     <div className="draft-list">{posts.map(p=><div className="draft-row" key={p.id}><button disabled={busy} className={`draft-item ${p.id===post.id?'active':''}`} onClick={()=>open(p)}><span className={`status-dot ${liveIds.has(p.id)?'live':''}`}/><strong>{p.title||'Untitled story'}</strong><small>{p.adminState==='copying'?'Copy incomplete':p.adminState==='deleting'?'Deletion unfinished':liveIds.has(p.id)?'Published':'Draft'} · {p.category}</small></button>{adminMode&&<ItemActions label={p.title||'Untitled story'} disabled={busy} onUpdate={()=>updatePost(p)} onDuplicate={()=>copyPost(p)} onDelete={()=>removePost(p)}/>}</div>)}{!posts.length&&<p className="sidebar-empty">A story, a fun fact, a whole newsletter… make your first creation.</p>}</div>
     <button className="text-button" disabled={busy} onClick={()=>importRef.current?.click()}>↑ Import text draft</button><input hidden ref={importRef} type="file" accept="application/json,.json" onChange={e=>void importPost(e.target.files?.[0])}/>
