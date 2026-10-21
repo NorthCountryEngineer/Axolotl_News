@@ -62,3 +62,26 @@ test('admin-configured media workflows have only regional label detection capabi
   assert.deepEqual(statement.Condition, { StringEquals: { 'aws:RequestedRegion': { Ref: 'AWS::Region' } } });
   assert.ok(!JSON.stringify(policy).match(/PassRole|Training|Face|Project|Collection/));
 });
+
+test('game drafts and published snapshots have separate retained encrypted tables and scoped API access', () => {
+  for (const name of ['GameDrafts', 'PublishedGames']) {
+    const resource = r[name];
+    assert.equal(resource.Type, 'AWS::DynamoDB::Table');
+    assert.equal(resource.DeletionPolicy, 'Retain');
+    assert.equal(resource.UpdateReplacePolicy, 'Retain');
+    assert.equal(resource.Properties.BillingMode, 'PAY_PER_REQUEST');
+    assert.equal(resource.Properties.SSESpecification.SSEEnabled, true);
+    assert.ok(!resource.Properties.TableName, 'let CloudFormation allocate environment-specific table names');
+  }
+  assert.deepEqual(r.ApiFunction.Properties.Environment.Variables.GAME_DRAFT_TABLE, { Ref: 'GameDrafts' });
+  assert.deepEqual(r.ApiFunction.Properties.Environment.Variables.GAME_PUBLIC_TABLE, { Ref: 'PublishedGames' });
+  const policy = r.ApiRole.Properties.Policies.find((item: any) => item.PolicyName === 'GameDraftsAndSnapshots');
+  assert.deepEqual(policy.PolicyDocument.Statement[0].Resource, [
+    { 'Fn::GetAtt': ['GameDrafts', 'Arn'] }, { 'Fn::GetAtt': ['PublishedGames', 'Arn'] },
+  ]);
+  assert.deepEqual(policy.PolicyDocument.Statement[0].Action, [
+    'dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:DeleteItem', 'dynamodb:Scan', 'dynamodb:ConditionCheckItem',
+  ]);
+  assert.deepEqual(policy.PolicyDocument.Statement[1], { Effect: 'Allow', Action: ['dynamodb:ConditionCheckItem'], Resource: { 'Fn::GetAtt': ['AssistantState', 'Arn'] } });
+  assert.ok(!JSON.stringify(policy).includes('*'));
+});

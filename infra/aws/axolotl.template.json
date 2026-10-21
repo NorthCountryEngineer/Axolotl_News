@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Axolotl News Core-bound serverless publishing, private assistant state, and administrator-authorized AI and media workflows.",
+  "Description": "Axolotl News Core-bound serverless publishing, private assistant and game drafts, public game snapshots, and administrator-authorized workflows.",
   "Parameters": {
     "ApplicationOrigin": {
       "Type": "String",
@@ -380,6 +380,51 @@
                 }
               ]
             }
+          },
+          {
+            "PolicyName": "GameDraftsAndSnapshots",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:Scan",
+                    "dynamodb:ConditionCheckItem"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "GameDrafts",
+                        "Arn"
+                      ]
+                    },
+                    {
+                      "Fn::GetAtt": [
+                        "PublishedGames",
+                        "Arn"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:ConditionCheckItem"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "AssistantState",
+                      "Arn"
+                    ]
+                  }
+                }
+              ]
+            }
           }
         ]
       },
@@ -389,7 +434,8 @@
           "must": [
             "Assistant persistence is limited to its separate state table.",
             "Bedrock grants InvokeModel on regional foundation models, own-account regional profiles, and domestic US profile targets; profile metadata reads stay within own-account regional profiles.",
-            "Media recognition is limited to regional label detection; no IAM, subscription, training, face, project or model deployment permissions."
+            "Media recognition is limited to regional label detection; no IAM, subscription, training, face, project or model deployment permissions.",
+            "Game data operations are scoped to the two dedicated game tables; additional assistant-table authority is condition-check only for registry revocation guards."
           ],
           "mutable": "change-with-constraints"
         }
@@ -467,6 +513,12 @@
             },
             "ASSISTANT_TABLE": {
               "Ref": "AssistantState"
+            },
+            "GAME_DRAFT_TABLE": {
+              "Ref": "GameDrafts"
+            },
+            "GAME_PUBLIC_TABLE": {
+              "Ref": "PublishedGames"
             }
           }
         }
@@ -477,7 +529,8 @@
           "must": [
             "Preserve Core credentials and content/media bindings.",
             "Default assistant configuration prohibits paid execution until an administrator saves permission.",
-            "No provider operation starts during configuration or outlives its request without a persisted checkpoint."
+            "No provider operation starts during configuration or outlives its request without a persisted checkpoint.",
+            "Creation settings and draft revisions are checked atomically before game creation, editing or publication; an off switch leaves published games playable."
           ],
           "mutable": "change-with-constraints"
         }
@@ -602,6 +655,78 @@
           "SSEEnabled": true
         }
       }
+    },
+    "GameDrafts": {
+      "Type": "AWS::DynamoDB::Table",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Private game definitions, owner-bound conversations, playtest receipts and versioned creation settings.",
+          "must": [
+            "Retain state on stack deletion or replacement.",
+            "Do not add anonymous table or browser credential access; all reads pass through the API."
+          ],
+          "mutable": "change-with-constraints"
+        }
+      },
+      "Properties": {
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "id",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "id",
+            "KeyType": "HASH"
+          }
+        ],
+        "PointInTimeRecoverySpecification": {
+          "PointInTimeRecoveryEnabled": false
+        },
+        "SSESpecification": {
+          "SSEEnabled": true
+        }
+      }
+    },
+    "PublishedGames": {
+      "Type": "AWS::DynamoDB::Table",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Explicitly copied game definitions only, without conversations, owners or test receipts.",
+          "must": [
+            "Retain state on stack deletion or replacement.",
+            "Do not add anonymous table or browser credential access; all reads pass through the API."
+          ],
+          "mutable": "change-with-constraints"
+        }
+      },
+      "Properties": {
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "id",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "id",
+            "KeyType": "HASH"
+          }
+        ],
+        "PointInTimeRecoverySpecification": {
+          "PointInTimeRecoveryEnabled": false
+        },
+        "SSESpecification": {
+          "SSEEnabled": true
+        }
+      }
     }
   },
   "Outputs": {
@@ -637,6 +762,16 @@
       "Value": {
         "Ref": "AssistantState"
       }
+    },
+    "GameDraftTable": {
+      "Value": {
+        "Ref": "GameDrafts"
+      }
+    },
+    "PublishedGameTable": {
+      "Value": {
+        "Ref": "PublishedGames"
+      }
     }
   },
   "Conditions": {
@@ -658,16 +793,22 @@
       "AWSAgentToolkit": "aws-cloudformation@3"
     },
     "com.aws.cloudformation.Context": {
-      "arch": "HTTP API -> Core-authorized Lambda -> separate content/assistant tables and private media; saved admin settings authorize explicit workflow model calls.",
+      "arch": "HTTP API -> Core-authorized Lambda -> separate content, assistant, private game and public game tables; sandboxed declarative games run entirely in browsers.",
       "must": [
         "Preserve existing content tables and media bucket when updating.",
-        "Only saved administrator configuration and current mode access authorize model execution; saving settings never invokes a model."
+        "Only saved administrator configuration and current mode access authorize model execution; saving settings never invokes a model.",
+        "Keep game conversations and test receipts private; only explicitly published game snapshots are anonymously readable."
       ],
       "ref": [
         {
           "at": "docs/AGENT_WORKFLOWS.md",
           "has": "assistant access, admin model authorization, retained state and API-first release",
           "scope": "assistant"
+        },
+        {
+          "at": "docs/GAME_STUDIO.md",
+          "has": "game creation permissions, private playtest, publication and server creation switch",
+          "scope": "games"
         }
       ]
     }
