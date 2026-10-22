@@ -91,7 +91,7 @@ export async function coreRequest<T>(path: string, method = 'GET', body?: unknow
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const r = await fetch(`${c.api_url.replace(/\/$/, '')}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), credentials: 'omit', redirect: 'error' });
   const data = await r.json();
-  if (!r.ok) throw new Error(data.error || 'The publishing service could not complete the request.');
+  if (!r.ok) throw Object.assign(new Error(data.error || 'The publishing service could not complete the request.'), { status: r.status });
   return data as T;
 }
 export async function coreSession(): Promise<boolean> {

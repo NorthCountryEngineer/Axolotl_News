@@ -87,6 +87,15 @@ test('a failed publishing session is reported instead of silently looking signed
   assert.ok(h.store.has('axolotl-core-tokens'), 'A permission failure must not discard a valid identity token.');
 });
 
+test('private workspace requests retain HTTP permission status for clearing cached data', async () => {
+  const h = harness();
+  h.store.set('axolotl-core-tokens', JSON.stringify({ access_token: 'access', expires_at: Date.now() + 300000 }));
+  for (const status of [401, 403, 503]) {
+    h.respond(async () => ({ ok: false, status, json: async () => ({ error: 'Request unavailable.' }) }));
+    await assert.rejects(h.api.coreRequest('/feedback'), (error: any) => error.message === 'Request unavailable.' && error.status === status);
+  }
+});
+
 test('admin access requires live write and publish permissions, while an editor only needs write', async () => {
   const h = harness();
   assert.equal(await h.api.coreAdminSession(), false);
