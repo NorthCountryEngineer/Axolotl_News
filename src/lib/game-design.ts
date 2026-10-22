@@ -1,4 +1,4 @@
-import type { GameSpec } from './game-types';
+import type { GameLevel, GameSpec } from './game-types';
 
 /** Data is the only author-controlled input to the fixed game engine. */
 export function validateGameSpec(value: unknown): GameSpec {
@@ -16,16 +16,17 @@ export function validateGameSpec(value: unknown): GameSpec {
     if (typeof input !== 'number' || !Number.isInteger(input) || input < min || input > max) throw new Error(`${label} must be a whole number from ${min} to ${max}.`);
     return input;
   }
-  const spec = object(value, ['version', 'title', 'description', 'genre', 'theme', 'player', 'rules', 'objects', 'instructions'], 'Game');
+  const version = value && typeof value === 'object' ? (value as Record<string, unknown>).version : undefined;
+  if (version !== 1 && version !== 2) throw new Error('Unsupported game version.');
+  const spec = object(value, ['version', 'title', 'description', 'genre', 'theme', 'player', 'rules', 'objects', 'instructions', ...(version === 2 ? ['progression', 'levels'] : [])], 'Game');
   const player = object(spec.player, ['name', 'color', 'speed', 'jump'], 'Player');
   const rules = object(spec.rules, ['goal', 'timeLimit', 'lives', 'difficulty'], 'Rules');
   const objects = object(spec.objects, ['collectible', 'hazard'], 'Objects');
-  if (spec.version !== 1) throw new Error('Unsupported game version.');
   if (!['collect', 'dodge', 'platformer'].includes(spec.genre as string)) throw new Error('Choose collect, dodge, or platformer.');
   if (!['pond', 'space', 'garden'].includes(spec.theme as string)) throw new Error('Choose pond, space, or garden.');
   if (typeof player.color !== 'string' || !/^#[0-9a-f]{6}$/iu.test(player.color)) throw new Error('Player color must be a six-digit hex color.');
-  return {
-    version: 1,
+  const clean: GameSpec = {
+    version,
     title: text(spec.title, 80, 'Title'), description: text(spec.description, 300, 'Description', true),
     genre: spec.genre as GameSpec['genre'], theme: spec.theme as GameSpec['theme'],
     player: { name: text(player.name, 40, 'Player name'), color: player.color, speed: integer(player.speed, 2, 8, 'Speed'), jump: integer(player.jump, 6, 14, 'Jump') },
@@ -33,6 +34,45 @@ export function validateGameSpec(value: unknown): GameSpec {
     objects: { collectible: text(objects.collectible, 30, 'Collectible'), hazard: text(objects.hazard, 30, 'Hazard') },
     instructions: text(spec.instructions, 300, 'Instructions', true),
   };
+  if (version === 2) {
+    clean.progression = text(spec.progression, 300, 'Progression');
+    if (!Array.isArray(spec.levels) || spec.levels.length < 1 || spec.levels.length > 8) throw new Error('A game needs 1 to 8 levels.');
+    const ids = new Set<string>();
+    clean.levels = spec.levels.map(input => {
+      const level = object(input, ['id', 'title', 'brief', 'theme', 'rules', 'seed'], 'Level');
+      if (typeof level.id !== 'string' || !/^level-[1-8]$/u.test(level.id) || ids.has(level.id)) throw new Error('Level identifiers must be unique, from level-1 to level-8.');
+      ids.add(level.id);
+      if (!['pond', 'space', 'garden'].includes(level.theme as string)) throw new Error('Choose pond, space, or garden for each level.');
+      const settings = object(level.rules, ['goal', 'timeLimit', 'lives', 'difficulty'], 'Level rules');
+      return { id: level.id, title: text(level.title, 80, 'Level title'), brief: text(level.brief, 300, 'Level brief'), theme: level.theme as GameLevel['theme'], seed: integer(level.seed, 1, 2147483647, 'Layout seed'), rules: { goal: integer(settings.goal, 3, 40, 'Level goal'), timeLimit: integer(settings.timeLimit, 30, 180, 'Level time'), lives: integer(settings.lives, 1, 5, 'Level lives'), difficulty: integer(settings.difficulty, 1, 5, 'Level difficulty') } };
+    });
+  }
+  return clean;
+}
+
+/** Legacy games retain their original rules and layout, without rewriting saved data. */
+export function getGameLevels(spec: GameSpec): GameLevel[] {
+  return spec.version === 2 ? structuredClone(spec.levels || []) : [{ id: 'level-1', title: spec.title, brief: spec.instructions || 'Collect treasures and avoid obstacles.', theme: spec.theme, rules: { ...spec.rules }, seed: 17031 }];
+}
+
+function layoutSeed(text: string): number {
+  let hash = 17031;
+  for (let i = 0; i < text.length; i++) hash = (Math.imul(hash, 31) + text.charCodeAt(i)) >>> 0;
+  return hash % 2147483646 + 1;
+}
+
+/** Free fallback: explicit progression from the creator's rules, with saved layout variation. */
+export function planGameLevels(spec: GameSpec, count: number, seedText: string, previous: GameLevel[] = []): GameSpec {
+  if (!Number.isInteger(count) || count < 1 || count > 8) throw new Error('Choose 1 to 8 levels.');
+  const levels: GameLevel[] = Array.from({ length: count }, (_, index) => {
+    const progress = count === 1 ? 1 : index / (count - 1);
+    const stage = count === 1 ? 'Your adventure' : index === 0 ? 'First steps' : index === count - 1 ? 'The big adventure' : `Practice trail ${index}`;
+    const difficulty = Math.max(1, Math.min(5, spec.rules.difficulty - (count === 1 ? 0 : 1) + Math.floor(progress * (count === 1 ? 0 : 2))));
+    const goal = Math.max(3, Math.round(spec.rules.goal * (count === 1 ? 1 : 0.6 + 0.4 * progress)));
+    const focus = count === 1 ? 'Explore the world at your own pace.' : index === 0 ? 'Learn the controls with a smaller collection goal and fewer obstacles.' : index === count - 1 ? 'Put your practice together with the full collection goal and the strongest challenge.' : 'Practice finding treasures while watching a more varied obstacle pattern.';
+    return { id: `level-${index + 1}`, title: stage, brief: `${focus} Collect ${goal} ${spec.objects.collectible}s and avoid ${spec.objects.hazard}s.`, theme: spec.theme, rules: { ...spec.rules, goal, difficulty }, seed: previous[index]?.seed || layoutSeed(`${seedText}|${index + 1}`) };
+  });
+  return validateGameSpec({ ...spec, version: 2, progression: count === 1 ? 'One complete adventure with a saved layout. Lives and time reset when you retry.' : 'Start with the controls and a smaller goal, practice avoiding obstacles, then finish with the full goal and a greater challenge. Each level starts with fresh lives and time.', levels });
 }
 
 export function defaultGameSpec(): GameSpec {
@@ -42,7 +82,8 @@ export function defaultGameSpec(): GameSpec {
 /** A transparent, bounded conversational builder; it does not invoke an AI model. */
 export function designGame(message: string, current?: GameSpec): { spec: GameSpec; reply: string } {
   if (typeof message !== 'string' || !message.trim() || message.length > 2000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(message)) throw new Error('Describe your game in 1 to 2,000 characters.');
-  const spec = current ? validateGameSpec(current) : defaultGameSpec();
+  let spec = current ? validateGameSpec(current) : defaultGameSpec();
+  const before = structuredClone(spec);
   const lower = message.toLowerCase();
   const changes: string[] = [], notes: string[] = [];
   const has = (regex: RegExp) => regex.test(lower);
@@ -101,8 +142,47 @@ export function designGame(message: string, current?: GameSpec): { spec: GameSpe
     const controls = spec.genre === 'platformer' ? 'Use the arrow keys or WASD to move; Space or Up jumps.' : 'Use the arrow keys or WASD to swim.';
     spec.instructions = `${controls} Collect ${spec.rules.goal} ${spec.objects.collectible}${spec.rules.goal === 1 ? '' : 's'} before time runs out. Avoid ${spec.objects.hazard}s. Touch controls are available below the game.`;
   }
+  const countWords: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8 };
+  const countMatch = lower.match(/\b(\d+|one|two|three|four|five|six|seven|eight)(?:[ -]+(?:gentle|easy|tricky|challenging|short|long|fun|gradual|increasingly|progressively|harder)){0,3}[ -]+levels?\b|\blevels?\s*(?:count\s*)?(?:to|is|:|=)\s*(\d+)\b/);
+  let count = spec.levels?.length || 3, acceptedCount = false;
+  if (countMatch) {
+    const token = countMatch[1] || countMatch[2], requested = countWords[token] || Number(token);
+    if (requested >= 1 && requested <= 8) { count = requested; acceptedCount = true; changes.push(`${count} levels`); }
+    else notes.push('A game supports 1 to 8 levels; I kept the previous level count.');
+  }
+  const target = lower.match(/\blevel\s+([1-8])\b/), shuffle = /\b(?:shuffle|randomi[sz]e|regenerate)(?:(?:\s+(?:the|all|level))?\s+(?:layouts?|maps?|levels?)\b|\s+level\s+[1-8]\b)|\bnew\s+layouts?\b/u.test(lower);
+  const replan = /\b(?:replan|rebuild|redesign)\s+(?:the\s+)?(?:levels?|progression)\b|\badd\s+(?:more\s+)?levels?\b|\blevel\s+progression\b/u.test(lower);
+  const mechanicsChanged = JSON.stringify(before.rules) !== JSON.stringify(spec.rules) || before.theme !== spec.theme || before.genre !== spec.genre || JSON.stringify(before.objects) !== JSON.stringify(spec.objects);
+  const seedText = `${message}|${spec.title}`;
+  if (target && before.version === 2 && !acceptedCount && !replan) {
+    const index = Number(target[1]) - 1, levels = getGameLevels(before);
+    if (!levels[index]) { notes.push(`This game does not have level ${index + 1}.`); spec.rules = before.rules; spec.theme = before.theme; }
+    else {
+      const level = levels[index];
+      // Reuse the complete rule parser against this level's current settings.
+      // A legacy-shaped context prevents recursive level planning.
+      const requested = designGame(message, { version: 1, title: spec.title, description: spec.description, genre: spec.genre, theme: level.theme, player: spec.player, rules: level.rules, objects: spec.objects, instructions: spec.instructions }).spec;
+      level.rules = requested.rules;
+      if (has(/\b(hard|harder|challenging)\b/)) level.rules.difficulty = Math.min(5, Math.max(before.levels![index].rules.difficulty + 1, 4));
+      if (world) level.theme = requested.theme;
+      if (shuffle) level.seed = layoutSeed(`${level.seed}|${seedText}|${index + 1}`);
+      if (JSON.stringify(level.rules) !== JSON.stringify(before.levels![index].rules) || level.theme !== before.levels![index].theme || JSON.stringify(before.objects) !== JSON.stringify(spec.objects)) level.brief = `Practice this part of the adventure. Collect ${level.rules.goal} ${spec.objects.collectible}s within ${level.rules.timeLimit} seconds and avoid ${spec.objects.hazard}s.`;
+      spec = { ...spec, rules: before.rules, theme: before.theme, levels };
+      changes.push(`level ${index + 1}`);
+    }
+  } else if (!current || acceptedCount || replan || before.version === 2 && mechanicsChanged) {
+    spec = planGameLevels(spec, count, seedText, shuffle ? [] : getGameLevels(before).slice(0, before.version === 2 ? 8 : 0));
+    changes.push('a staged level plan');
+  } else if (shuffle && before.version === 2) {
+    spec.levels = getGameLevels(spec).map((level, index) => ({ ...level, seed: layoutSeed(`${level.seed}|${seedText}|${index + 1}`) }));
+    changes.push('fresh saved layouts');
+  }
+  if (spec.version === 2 && !customInstructions && (changes.length || !current)) {
+    const controls = spec.genre === 'platformer' ? 'Use arrows or WASD to move; Space or Up jumps.' : 'Use arrows or WASD to swim.';
+    spec.instructions = `${controls} Complete each level’s collection goal and avoid ${spec.objects.hazard}s. Each level starts with fresh lives and time. Touch controls are available below the game.`;
+  }
   if (has(/\b(multiplayer|3d|online|chat|leaderboard|shoot(?:ing|er)?|weapons?|upload|custom code|javascript|payment|purchase|soundtrack|music)\b/) || /https?:\/\/|<script|javascript:/iu.test(message)) notes.push('This builder supports single-player 2D collection, dodging, and platform games with built-in artwork. It cannot add custom code, external assets, music, online features, or purchases.');
   const summary = changes.length ? `Updated ${[...new Set(changes)].join(', ')}.` : 'I can build a collection, dodging, or platform game in a pond, space, or garden.';
-  const help = changes.length ? 'Test it, then tell me what to change. You can adjust the title, player color, speed, jump, goal, time, lives, and difficulty.' : 'Try “a space platformer, collect 12, 90 seconds, 3 lives,” or use a line such as “Title: Moon Axolotl”.';
+  const help = changes.length ? 'Review the level plan, then test each level. Ask for “5 levels”, “level 2 harder”, or “shuffle layouts”. The free guided plan uses fixed progression rules; a configured AI assistant can design a tailored progression.' : 'Try “a space platformer, 3 levels, collect 12, 90 seconds, 3 lives,” or use a line such as “Title: Moon Axolotl”.';
   return { spec: validateGameSpec(spec), reply: [summary, ...notes, help].join(' ') };
 }

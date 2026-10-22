@@ -5,13 +5,21 @@ Game studio adds short, browser-based 2D arcade games to Axolotl News. The engin
 ## Create, test, publish
 
 1. Open **Editor’s desk**, sign in through Core, and choose **Game studio**. You can also open `/game-studio` directly.
-2. Describe a game. The built-in guided builder supports collecting, dodging, and platform jumping. Pick a pond, space, or garden setting; describe your character, collectibles, and hazards. The first game draft is private.
-3. Continue the conversation to refine the supported rules. For precise changes, use the game details and controls beside the conversation. Save changes before testing. Unsupported mechanics need engine development; the guided builder is not an unrestricted code generator.
-4. Choose **Playtest**. Complete a round, winning or losing, then acknowledge the playtest. Game controls work with a keyboard or the on-screen touch buttons. Pause is available inside the player.
+2. Describe a game. The built-in guided builder supports collecting, dodging, and platform jumping. Pick a pond, space, or garden setting; describe your character, collectibles, and hazards. New games have three levels by default; request one to eight. The first game draft is private.
+3. Continue the conversation to refine the supported rules and level progression. Try **“Five levels, starting gentle and ending tricky”**, **“Level 2 harder, collect 10”**, or **“Shuffle layouts”**. Review the level plan and edit its titles, briefs, worlds, goals, time, lives, and difficulty. Levels can be added, removed, or reordered. Save changes before testing. Unsupported mechanics need engine development; the guided builder is not an unrestricted code generator.
+4. Choose **Playtest**. Play the whole adventure or select individual levels. Finish every level at least once, winning or losing, then acknowledge the complete playtest. The checklist tracks the current saved revision. Game controls work with a keyboard or the on-screen touch buttons. Pause, restart level, and restart adventure are available inside the player.
 5. A Publisher can choose **Publish** after that saved revision has been playtested. A creator with Editor access needs a Publisher to review and publish it.
 6. Visit **Games** (`/games`). Only published versions appear here. Copy a game's `/games/<id>` link to share it.
 
 Changing the draft after a playtest invalidates that test. Changing a draft after publication leaves the last published game intact until a new tested revision is published. A playtest acknowledgement is a human review checkpoint, not an anti-cheat proof or a server-run game simulation.
+
+## Levels and procedural layouts
+
+A level plan explains the intended progression and each level's objective. The free guided designer builds an introduction, practice levels, and a finale from the requested rules. The configured generative assistant can instead design a tailored sequence from the creator's conversation, audience, and goals. Only the engine's supported mechanics can change: collection targets, time, lives, difficulty, world, and saved layout variation. A description cannot introduce an unsupported mechanic.
+
+Layouts use saved seeds. Collectibles, obstacle placement, falling patterns, and platform offsets vary between levels, while replaying a saved level reproduces the same initial board and sequence for the same inputs. **Shuffle layout** deliberately changes a level's seed; save and retest it before publication. Difficulty controls obstacle density and movement. Platform layouts maintain overlapping surfaces with reachable height differences, including at the lowest movement and jump settings.
+
+Winning advances to a level-complete screen with a **Next level** button. Each level starts with fresh lives and time; adventure scores and elapsed time accumulate across completed levels. Losing allows a retry of that level. Published layouts remain the tested snapshot until a new revision is published. Existing version 1 games retain their original single-level rules and layout, and can be upgraded by adding levels.
 
 ## Permissions and administration
 
@@ -34,7 +42,7 @@ The default guided builder runs without a paid model. It applies a bounded set o
 
 An administrator can optionally select an existing assistant mode for follow-up conversation. The backend uses that mode's agent, model, audience, and saved `allowPaidExecution` authorization. Merely opening settings, saving settings, creating a game, or playing a game does not invoke a model. An enabled generative mode uses the existing Bedrock connection; this release does not add direct provider adapters.
 
-Model output must be a complete, strictly validated game definition. Text is treated as text; unknown properties, scripts, assets, URLs, invalid numbers, and unsupported mechanics are not executable game features. Requests have bounded history/output and durable operation receipts before provider I/O. An interrupted or uncertain request is never automatically replayed. Resolve it with a deliberate edit or a new duplicate; do not repeatedly send the same request hoping it will charge again.
+Model output must be a complete, strictly validated game definition, including the level plan and saved seeds. Partial or truncated output is rejected, and a multi-level game cannot silently become a legacy single-level game. Text is treated as text; unknown properties, scripts, assets, URLs, invalid numbers, and unsupported mechanics are not executable game features. Requests have bounded history/output and durable operation receipts before provider I/O. An interrupted or uncertain request is never automatically replayed. Resolve it with a deliberate edit or a new duplicate; do not repeatedly send the same request hoping it will charge again.
 
 ## Isolation and storage
 
@@ -52,7 +60,7 @@ From the existing repository:
 
 ```sh
 cd "/Users/ericyager/Documents/ChatGPT/Axolotl News"
-git switch codex/game-studio
+git switch codex/game-levels-release
 npm run test
 python3 -m unittest discover -s tests -p 'test_*.py'
 npm run build:preview
@@ -61,13 +69,13 @@ VITE_APP_MODE=local npm run dev -- --port 5174 --strictPort
 
 Open `http://127.0.0.1:5174`. The existing `.env.local` should contain `VITE_APP_MODE=local`; the banner must say **LOCAL PREVIEW**. If it does not, stop and check that mode before continuing. Local drafts and published snapshots are stored only in this browser. Local preview gives its preview administrator access; it is not a replacement for Core authorization testing.
 
-Validate the whole path: create a game, refine it, save, finish a private playtest, acknowledge it, publish, open Games, edit the draft and verify the public version stays unchanged, retest and republish, then duplicate/unpublish/delete with Admin actions on. Turn creation off, try to create or edit, and verify the existing public game still plays. Test keyboard, touch controls, pause and restart.
+Validate the whole path: create a three-level game, refine one level conversationally, shuffle its layout, save, and check the review checklist is empty. Test a level in isolation, then the other levels or the full adventure. Acknowledge only after all levels have been reviewed, publish, and open Games. Confirm next-level transitions, retry, adventure totals, keyboard, touch, and pause. Edit a draft and verify its public version stays unchanged. Retest and republish, then duplicate/unpublish/delete with Admin actions on. Turn creation off, try to create or edit, and verify the existing public game still plays.
 
 ## Existing AWS release
 
-This implementation prepares the release; building or testing it locally does not deploy AWS resources. The template adds **two DynamoDB tables**, two Lambda environment bindings (`GAME_DRAFT_TABLE` and `GAME_PUBLIC_TABLE`), and a table-scoped data policy with condition-check-only access to the existing assistant registry. The API archive includes `games.py`. Existing post tables, media, credentials and provider settings are preserved.
+The initial Game studio release installed **two DynamoDB tables**, two Lambda environment bindings (`GAME_DRAFT_TABLE` and `GAME_PUBLIC_TABLE`), and a table-scoped data policy with condition-check-only access to the existing assistant registry. The API archive includes `games.py`. The level extension reuses those resources and requires an API code update followed by the frontend update; it adds no infrastructure or model subscription. Existing post tables, media, credentials, and provider settings are preserved. Building or testing locally does not deploy a release.
 
-Use the existing API-first release process with this branch's template and archive, then release the same source revision to the existing Amplify app. Do not update only Lambda code: the game table bindings and permissions must be applied as well. Review a CloudFormation change set first; expect two retained on-demand table additions and an update to the existing function/role. Stop if it proposes replacing or removing existing content or identity resources. Keep all existing stack parameters with `UsePreviousValue`, changing only `LambdaCodeKey` to the newly packaged archive. No Core deployment, DNS change, model subscription, or model activation is needed.
+Use the existing API-first release process with this branch's template and archive, then release the same source revision to the existing Amplify app. Review a CloudFormation change set first. For an existing Game studio installation, expect only the function code update; stop if it proposes replacing or removing existing content or identity resources. Keep all existing stack parameters with `UsePreviousValue`, changing only `LambdaCodeKey` to the newly packaged archive. If the installation predates Game studio, its two game table bindings and permissions must be installed before the frontend. No Core deployment, DNS change, model subscription, or model activation is needed.
 
 After the API update, verify `/health`, a `401` for anonymous `/games/settings` and `/games`, and `200` for anonymous `/games/published`. Then release the frontend. In Core, confirm Editor access cannot publish or administer settings, Publisher access can publish only after testing, and an authorized administrator can pause creation. Do not invoke a paid model merely to test the release.
 

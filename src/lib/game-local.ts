@@ -1,4 +1,4 @@
-import { defaultGameSpec, designGame, validateGameSpec } from './game-design';
+import { designGame, getGameLevels, validateGameSpec } from './game-design';
 import type { Game, GameConfig, GameSettings, GameSpec } from './game-types';
 
 type StoragePort = Pick<Storage, 'getItem' | 'setItem'>;
@@ -64,7 +64,7 @@ export class LocalGameLibrary {
     const existing = state.drafts.find(item => item.id === id);
     if (existing) { if (state.prompts[id] !== message) throw new Error('This game identifier already belongs to another idea.'); return copy(existing); }
     if (state.drafts.length >= 200) throw new Error('This game library has reached its draft limit. Delete an old draft first.');
-    const result = designGame(message, defaultGameSpec()), stamp = now();
+    const result = designGame(message), stamp = now();
     const game: Game = { id, spec: result.spec, revision: 0, status: 'Draft', messages: [{ id: crypto.randomUUID(), role: 'user', text: message }, { id: crypto.randomUUID(), role: 'assistant', text: result.reply }], createdAt: stamp, updatedAt: stamp };
     state.drafts.unshift(game); state.prompts[id] = message; state.receipts[id] = []; this.write(state); return copy(game);
   }
@@ -83,9 +83,14 @@ export class LocalGameLibrary {
     game.messages = [...(game.messages || []), { id: requestId, role: 'user', text: message }, { id: crypto.randomUUID(), role: 'assistant', text: result.reply }];
     state.receipts[id] = [...(state.receipts[id] || []), { id: requestId, message, revision }]; return this.update(state, game);
   }
-  test(id: string, revision: number): Game {
+  test(id: string, revision: number, reviewedLevelIds?: string[]): Game {
     const state = this.read(), game = this.draft(state, id, revision);
-    validateGameSpec(game.spec); game.testedRevision = game.revision + 1; return this.update(state, game);
+    validateGameSpec(game.spec);
+    if (game.spec.version === 2) {
+      const ids = getGameLevels(game.spec).map(level => level.id);
+      if (!Array.isArray(reviewedLevelIds) || reviewedLevelIds.length !== ids.length || new Set(reviewedLevelIds).size !== ids.length || reviewedLevelIds.some(id => !ids.includes(id))) throw new Error('Complete and review every level of this saved version before marking the playtest complete.');
+    }
+    game.testedRevision = game.revision + 1; return this.update(state, game);
   }
   publish(id: string, revision: number): Game {
     const state = this.read(); this.enabled(state); const game = this.draft(state, id, revision);
