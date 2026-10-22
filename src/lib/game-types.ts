@@ -1,13 +1,24 @@
+export type GameRules = { goal: number; timeLimit: number; lives: number; difficulty: number };
+export type GameLevel = {
+  id: string;
+  title: string;
+  brief: string;
+  theme: 'pond' | 'space' | 'garden';
+  rules: GameRules;
+  seed: number;
+};
 export type GameSpec = {
-  version: 1;
+  version: 1 | 2;
   title: string;
   description: string;
   genre: 'collect' | 'dodge' | 'platformer';
   theme: 'pond' | 'space' | 'garden';
   player: { name: string; color: string; speed: number; jump: number };
-  rules: { goal: number; timeLimit: number; lives: number; difficulty: number };
+  rules: GameRules;
   objects: { collectible: string; hazard: string };
   instructions: string;
+  progression?: string;
+  levels?: GameLevel[];
 };
 
 export type GameMessage = { id: string; role: 'user' | 'assistant'; text: string };
@@ -27,4 +38,4 @@ export type Game = {
 };
 export type GameConfig = { version: 1; revision: number; creationEnabled: boolean; assistantModeId: string };
 export type GameSettings = { config: GameConfig; canCreate: boolean; canPublish: boolean; canManage: boolean; canAdminContent: boolean };
-export type GameResult = { outcome: 'won' | 'lost'; elapsed: number; score: number };
+export type GameResult = { outcome: 'level-complete' | 'won' | 'lost'; elapsed: number; score: number; reviewedLevelIds: string[] };

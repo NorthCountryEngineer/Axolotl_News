@@ -39,7 +39,7 @@ class GameTests(unittest.TestCase):
         self.af = games.framework()
         self.patched_provider = patch.object(self.af, 'provider', return_value=self.provider)
         self.patched_provider.start(); self.addCleanup(self.patched_provider.stop)
-        self.provider.converse.return_value = {'output': {'message': {'content': [{'text': json.dumps({'text': 'Here is your space adventure.', 'spec': games.default_spec()})}]}}}
+        self.provider.converse.return_value = {'output': {'message': {'content': [{'text': json.dumps({'text': 'Here is your space adventure.', 'spec': games.design_game('a pond collection game')['spec']})}]}}}
 
     def authorize(self, event, *permissions):
         if event.get('headers', {}).get('authorization') != 'Bearer current': raise games.GameError(401, 'Sign in.')
@@ -60,7 +60,8 @@ class GameTests(unittest.TestCase):
         return games.conversation(self.api, self.claims, state['id'], {'revision': state['revision'], 'requestId': request, 'message': message}, self.event())
 
     def finish_test(self, state):
-        return games.complete_test(self.api, self.claims, state['id'], {'revision': state['revision']})
+        return games.complete_test(self.api, self.claims, state['id'], {'revision': state['revision'],
+            'reviewedLevelIds': [level['id'] for level in state['spec'].get('levels', [{'id': 'level-1'}])]})
 
     def publish(self, state):
         return games.publication(self.api, self.claims, state['id'], {'revision': state['revision']}, True)
@@ -358,7 +359,7 @@ class GameTests(unittest.TestCase):
             stored = json.loads(self.stored()['payload'])
             self.assertEqual(stored['_pending']['id'], REQUEST)
             self.assertEqual(stored['_requests'][-1]['status'], 'pending')
-            return {'output': {'message': {'content': [{'text': json.dumps({'text': 'Updated.', 'spec': games.default_spec()})}]}}}
+            return {'output': {'message': {'content': [{'text': json.dumps({'text': 'Updated.', 'spec': deepcopy(state['spec'])})}]}}}
         self.provider.converse.side_effect = respond
         changed = self.message(state)
         self.assertEqual(changed['revision'], 2); self.assertNotIn('operationState', changed)
@@ -384,7 +385,7 @@ class GameTests(unittest.TestCase):
         registry = self.configure_model(); state = self.create()
         def respond(**kwargs):
             registry['allowPaidExecution'] = False; registry['revision'] += 1; self.write_registry(registry)
-            return {'output': {'message': {'content': [{'text': json.dumps({'text': 'Updated.', 'spec': games.default_spec()})}]}}}
+            return {'output': {'message': {'content': [{'text': json.dumps({'text': 'Updated.', 'spec': deepcopy(state['spec'])})}]}}}
         self.provider.converse.side_effect = respond
         self.error(403, lambda: self.message(state))
         pending, _ = games.load(self.api, self.claims, GAME)
@@ -394,7 +395,7 @@ class GameTests(unittest.TestCase):
         self.configure_model(); state = self.create()
         def respond(**kwargs):
             self.save_config(lambda config: config.update(creationEnabled=False))
-            return {'output': {'message': {'content': [{'text': json.dumps({'text': 'Updated.', 'spec': games.default_spec()})}]}}}
+            return {'output': {'message': {'content': [{'text': json.dumps({'text': 'Updated.', 'spec': deepcopy(state['spec'])})}]}}}
         self.provider.converse.side_effect = respond
         self.error(409, lambda: self.message(state))
         self.assertEqual(games.load(self.api, self.claims, GAME)[0]['revision'], 1)
@@ -403,7 +404,7 @@ class GameTests(unittest.TestCase):
         self.configure_model(); state = self.create(); self.claims['sub'] = OTHER
         def respond(**kwargs):
             self.claims['permissions'] = ['posts-write']
-            return {'output': {'message': {'content': [{'text': json.dumps({'text': 'Updated.', 'spec': games.default_spec()})}]}}}
+            return {'output': {'message': {'content': [{'text': json.dumps({'text': 'Updated.', 'spec': deepcopy(state['spec'])})}]}}}
         self.provider.converse.side_effect = respond
         self.error(403, lambda: self.message(state))
 
@@ -413,7 +414,7 @@ class GameTests(unittest.TestCase):
             pending = games.load(self.api, self.claims, GAME)[0]
             candidate = deepcopy(pending['spec']); candidate['title'] = 'Human wins'
             games.update(self.api, self.claims, GAME, {'revision': pending['revision'], 'spec': candidate})
-            return {'output': {'message': {'content': [{'text': json.dumps({'text': 'Updated.', 'spec': games.default_spec()})}]}}}
+            return {'output': {'message': {'content': [{'text': json.dumps({'text': 'Updated.', 'spec': deepcopy(state['spec'])})}]}}}
         self.provider.converse.side_effect = respond
         self.error(409, lambda: self.message(state))
         self.assertEqual(games.load(self.api, self.claims, GAME)[0]['spec']['title'], 'Human wins')
