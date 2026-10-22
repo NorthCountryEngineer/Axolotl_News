@@ -466,9 +466,9 @@ def list_games(api, claims, event, public=False):
             cursor = json.loads(base64.b64decode(raw, altchars=b'-_', validate=True))
             if not isinstance(cursor, dict) or set(cursor) != {'id'} or not isinstance(cursor['id'], str): raise ValueError()
             parts = cursor['id'].split(':')
-            if len(parts) != 4 or parts[0] not in ({'game'} if public else {'game', 'game-config'}): raise ValueError()
+            if len(parts) != 4 or parts[0] not in ({'game'} if public else {'game', 'game-config', 'feedback', 'feedback-config'}): raise ValueError()
             if not UUID.fullmatch(parts[1]) or not UUID.fullmatch(parts[2]): raise ValueError()
-            if parts[0] == 'game' and not UUID.fullmatch(parts[3]) or parts[0] == 'game-config' and parts[3]: raise ValueError()
+            if parts[0] in {'game', 'feedback'} and not UUID.fullmatch(parts[3]) or parts[0].endswith('-config') and parts[3]: raise ValueError()
             # Scan cursors are positions, never authorization. A mixed table page
             # can end on settings or another scope; records are filtered below.
             options['ExclusiveStartKey'] = cursor

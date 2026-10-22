@@ -1,0 +1,42 @@
+export type FeedbackKind = 'idea' | 'problem' | 'improvement';
+export type FeedbackArea = 'general' | 'stories' | 'games' | 'game-studio' | 'editor' | 'accounts' | 'agents';
+export type FeedbackStatus = 'new' | 'reviewing' | 'planned' | 'building' | 'done' | 'declined' | 'archived';
+export type FeedbackInput = { title: string; details: string; kind: FeedbackKind; area: FeedbackArea; page: '/' | '/studio' | '/game-studio' | '/games' | '/posts' | '/feedback' };
+export type DevelopmentPlan = {
+  summary: string;
+  approach: string;
+  steps: { title: string; details: string; files: string[] }[];
+  acceptanceCriteria: string[];
+  tests: string[];
+  risks: string[];
+  questions: string[];
+  effort: 'small' | 'medium' | 'large';
+};
+export type FeedbackProposal = {
+  id: string;
+  plan: DevelopmentPlan;
+  sourceFingerprint: string;
+  sourceRevision: number;
+  createdAt: string;
+  origin: 'guided' | 'agent';
+  agentName: string;
+  modelName: string;
+  contextVersion: number;
+  stale: boolean;
+  approvedAt?: string;
+};
+export type Feedback = FeedbackInput & {
+  id: string;
+  revision: number;
+  status: FeedbackStatus;
+  reply: string;
+  createdAt: string;
+  updatedAt: string;
+  own: boolean;
+  authorId?: string;
+  proposal?: FeedbackProposal;
+  planningState?: 'pending' | 'uncertain';
+  planningError?: string;
+};
+export type FeedbackConfig = { version: 1; revision: number; submissionEnabled: boolean; plannerModeId: string };
+export type FeedbackSettings = { config: FeedbackConfig; canReview: boolean; canConfigure: boolean; canPlan: boolean };

@@ -26,6 +26,7 @@ _secret = None
 _assistant = None
 _accounts = None
 _games = None
+_feedback = None
 
 class APIError(Exception):
     def __init__(self, status, message):
@@ -355,6 +356,18 @@ def dispatch(event):
     try: body = json.loads(raw)
     except ValueError: raise APIError(400, 'Invalid JSON.')
     if not isinstance(body, dict): raise APIError(400, 'Expected a JSON object.')
+    if path == '/feedback' or path.startswith('/feedback/'):
+        global _feedback
+        if _feedback is None:
+            import importlib.util
+            from pathlib import Path
+            spec = importlib.util.spec_from_file_location('axolotl_feedback', Path(__file__).with_name('feedback.py'))
+            _feedback = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(_feedback)
+        from types import SimpleNamespace
+        api = SimpleNamespace(authorize=authorize, clients=clients)
+        try: return _feedback.dispatch(api, event, method, path, body)
+        except _feedback.FeedbackError as error: raise APIError(error.status, error.message)
     if path == '/games' or path.startswith('/games/'):
         global _games
         if _games is None:
