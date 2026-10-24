@@ -10,7 +10,7 @@ The default deployment uses **NCE Core for identity and live permissions**. The 
 
 | Part | AWS deployment | Purpose |
 | --- | --- | --- |
-| Core public website | Amplify Hosting SSR compute, default Amplify hostname | Node proxy forwards the existing Django application over HTTPS; preserves its public issuer |
+| Core public website | Amplify Hosting SSR compute, `core.nnytech.ai` | Node proxy forwards the existing Django application over HTTPS; preserves its public issuer |
 | Core application and jobs | One ECS Fargate task containing a web container and worker container | Runs Django/Gunicorn and the durable `core_worker` |
 | Core database | Private, single-AZ RDS PostgreSQL | Stores accounts, organizations, permissions, integrations, and jobs |
 | Core origin | HTTPS Application Load Balancer at `core-origin.axolotl.news` | Accepts the trusted proxy origin credential; this is an infrastructure hostname, not the Core login URL |
@@ -51,7 +51,7 @@ Create a private worksheet outside Git with the following values; these are depl
 | --- | --- |
 | AWS profile, account, Region | Your existing account; use one Region for both Amplify apps, Core infrastructure, API/code bucket, and SSM parameter; Core's ACM certificate must be in the ALB Region |
 | Core production branch and Amplify app ID | Your chosen reviewed branch and the Core Amplify app |
-| Core public origin/issuer | `https://<branch>.<core-app-id>.amplifyapp.com` |
+| Core public origin/issuer | `https://core.nnytech.ai` for this production deployment |
 | Core backend origin | `https://core-origin.axolotl.news` |
 | Axolotl branch/app ID and initial origin | `https://<branch>.<axolotl-app-id>.amplifyapp.com` |
 | Final Axolotl origin | `https://axolotl.news` |
@@ -157,7 +157,7 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_IAM \
   --parameter-overrides \
     CoreImageUri=YOUR_ECR_REPOSITORY_URI@sha256:ACTUAL_DIGEST \
-    CorePublicOrigin=https://BRANCH.CORE_APP_ID.amplifyapp.com \
+    CorePublicOrigin=https://core.nnytech.ai \
     CoreOriginHost=core-origin.axolotl.news \
     CertificateArn=ACTUAL_REGIONAL_CERTIFICATE_ARN \
     CoreRuntimeSecretArn=ACTUAL_RUNTIME_SECRET_ARN \
@@ -206,7 +206,7 @@ Configure the Core Amplify proxy now, before using its portal:
 
 | Core Amplify production-branch variable | Value |
 | --- | --- |
-| `CORE_PUBLIC_ORIGIN` | Exact default Amplify origin/issuer |
+| `CORE_PUBLIC_ORIGIN` | Exact canonical public issuer: `https://core.nnytech.ai` |
 | `CORE_BACKEND_ORIGIN` | `https://core-origin.axolotl.news` |
 | `CORE_AWS_REGION` | Region containing the origin secret |
 | `CORE_ORIGIN_SECRET_ARN` | Stack output `CoreOriginSecretArn`, never the value |
@@ -215,13 +215,13 @@ Configure the Core Amplify proxy now, before using its portal:
 
 Attach the stack output `AmplifyComputeRoleArn` to the Core **production branch**, using **App settings → IAM roles → Compute role → Edit → branch override**. Its only resource permission is `secretsmanager:GetSecretValue` on the generated origin secret. An AWS build can already be billed before its environment gate runs. Keep Node 22 for the proxy build; its manifest uses Node 22 SSR compute. Save the build specification from `deployment/amplify-core/amplify.yml`, verify `WEB_COMPUTE` and cookie-cache settings, then start the reviewed build. [Amplify SSR compute roles](https://docs.aws.amazon.com/amplify/latest/userguide/amplify-SSR-compute-role.html).
 
-Sign in at the default Core Amplify URL using the parent email and the generated `bootstrap_password` from your private local runtime file. Change that initial password through Core's normal account controls. The Core issuer remains the default Amplify URL even though requests reach the origin subdomain. Test a sign-in, form POST, sign-out, and discovery document before proceeding.
+Sign in at `https://core.nnytech.ai` with your existing account. For an initial installation, use the parent email and generated `bootstrap_password` from the private runtime file, then change it through Core's normal account controls. Keep the canonical Core issuer identical in the backend, Amplify proxy build and application trust settings. The `core-origin` subdomain remains the protected backend. Test a sign-in, form POST, sign-out, and discovery document before proceeding.
 
 The Axolotl marketplace package registers an **external AWS Amplify runtime**. Registration installs its Core metadata, service, clients, and permission vocabulary; it does not create an Amplify app, deploy AWS, purchase anything, or infer authority from the application name. The reviewed package is `nce/marketplace.json` in Axolotl and an identical `examples/axolotl-news-package.json` in Core.
 
 Create or select the organization's **production** environment first. In Core's **Central admin → Environments → Create environment**, use `production`, a unique namespace such as `family-production`, application origin `https://axolotl.news`, blank ingress class/TLS secret fields, automatic deployment unchecked, and active checked. The namespace is an identity-boundary label here; this does not create Kubernetes resources. For an ordinary editor, grant the resulting `environment-production` access tag and the service permissions through **Users and permissions**. Use a parent-controlled administrator account for configuration; give the child an ordinary member account.
 
-Register production directly at `https://axolotl.news`, with callback `/oauth/callback`. A registration's origin is immutable within its installation/environment. Consequently, the simple production path does **not** first register its login at the default Axolotl Amplify URL and then rename it. Before DNS, test Core fully on its default URL and test Axolotl's static presentation/routes. Complete browser API/login/upload tests after `axolotl.news` becomes available. A separate staging environment/registration is an optional additional setup if you need full editor testing at a second hostname.
+Register production directly at `https://axolotl.news`, with callback `/oauth/callback`. A registration's origin is immutable within its installation/environment. Consequently, the simple production path does **not** first register its login at the default Axolotl Amplify URL and then rename it. Before changing Axolotl's DNS, test Core fully at its configured canonical issuer, `https://core.nnytech.ai`, and test Axolotl's static presentation/routes. Complete browser API/login/upload tests after `axolotl.news` becomes available. A separate staging environment/registration is an optional additional setup if you need full editor testing at a second hostname.
 
 Preserve the public configuration separately from the private confidential-client credentials. Only public metadata goes into the frontend; the private resource-client JSON goes into the server-side SSM SecureString. Both the browser client and confidential introspection client must belong to the **same Core service**.
 
@@ -288,7 +288,7 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_IAM \
   --parameter-overrides \
     ApplicationOrigin=https://axolotl.news \
-    CoreIssuer=https://BRANCH.CORE_APP_ID.amplifyapp.com \
+    CoreIssuer=https://core.nnytech.ai \
     CoreOrganizationId=ORGANIZATION_UUID_FROM_CORE \
     CoreServiceId=SERVICE_UUID_FROM_CORE \
     CoreCredentialsParameter=/axolotl-news/core-resource-client \
@@ -350,7 +350,7 @@ Keep any domain canonical redirect before the catch-all. Review an automatically
 
 Run the Core and public/static checks before changing the blog's DNS. Complete the editor, revocation and publication checks after step 10 makes the registered production hostname available:
 
-- Core's discovery document reports the exact configured default Amplify issuer. Sign in, submit a normal CSRF-protected form, and sign out. Test two separate browser sessions to ensure one person's authenticated page is never served to another.
+- Core's discovery document reports the exact configured canonical issuer, `https://core.nnytech.ai`. Sign in, submit a normal CSRF-protected form, and sign out. Test two separate browser sessions to ensure one person's authenticated page is never served to another.
 - The Core origin hostname rejects ordinary requests without the secret header. The health endpoint may be a narrowly scoped exception for ALB health checks; it must not reveal data or confer authorization.
 - From a terminal, `GET API_URL/health` and `GET API_URL/published` work. Unauthenticated `GET API_URL/posts`, upload signing, publishing, and deletion fail. API browser requests from the default Axolotl hostname are intentionally not covered by production CORS.
 - On the default Axolotl URL, check the presentation and direct SPA route refresh. Complete editor/login and feed API checks on the production hostname after DNS: Core's exact callback origin remains `https://axolotl.news`.
@@ -364,7 +364,7 @@ Core also includes a gated deployed acceptance script. Once the Core HTTPS origi
 
 ```sh
 CORE_ENABLE_AWS_DEPLOYMENT=true .venv/bin/python infra/aws/acceptance.py \
-  --public-origin https://BRANCH.CORE_APP_ID.amplifyapp.com \
+  --public-origin https://core.nnytech.ai \
   --backend-origin https://core-origin.axolotl.news \
   --browser-origin https://axolotl.news \
   --browser-client-id PUBLIC_BROWSER_CLIENT_ID_FROM_CORE
@@ -374,7 +374,7 @@ It makes real deployed requests, which can be billed, to check TLS, the issuer, 
 
 ## 10. Attach `axolotl.news` with Cloudflare
 
-Core continues using its default Amplify public domain; its `core-origin` DNS record remains the private-boundary backend entry point. Attach the custom domain to the **Axolotl Amplify app** only.
+Core uses `https://core.nnytech.ai` as its canonical public issuer; its `core-origin` DNS record remains the protected backend entry point. Preserve Core's existing custom-domain attachment. The following steps attach `axolotl.news` to the **Axolotl Amplify app**.
 
 1. Confirm production Core registration uses `https://axolotl.news/oauth/callback`, its browser allowed origin is `https://axolotl.news`, and the API stack's `ApplicationOrigin` is `https://axolotl.news`. Do not use wildcard production origins or edit an immutable external registration to another hostname.
 2. In the Axolotl app, open **Hosting → Custom domains → Add domain**. Enter `axolotl.news`. Choose a third-party DNS provider/manual configuration; keep DNS at Cloudflare and do not create or transfer a Route 53 hosted zone.
