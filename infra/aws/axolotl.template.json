@@ -698,7 +698,7 @@
       "UpdateReplacePolicy": "Retain",
       "Metadata": {
         "com.aws.cloudformation.Context": {
-          "why": "Explicitly copied game definitions only, without conversations, owners or test receipts.",
+          "why": "Published game definitions and bounded arcade boards. The API exposes allowlisted game fields and score nicknames, points and dates; player keys and submission receipts stay private.",
           "must": [
             "Retain state on stack deletion or replacement.",
             "Do not add anonymous table or browser credential access; all reads pass through the API."

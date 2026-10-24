@@ -23,7 +23,7 @@ export AXOLOTL_DIR="/Users/ericyager/Documents/ChatGPT/Axolotl News"
 export AUTH_DEPLOY_DIR="$HOME/.axolotl-aws/app-auth-release"
 export CORE_STACK="nce-core-production"
 export CORE_REGISTRY_STACK="nce-core-production-registry"
-export CORE_PUBLIC_ORIGIN="https://main.dpn5tiolbymzn.amplifyapp.com"
+export CORE_PUBLIC_ORIGIN="https://core.nnytech.ai"
 mkdir -p "$AUTH_DEPLOY_DIR"
 cd "$HOME"
 ```
@@ -182,7 +182,7 @@ aws ecs wait services-stable --cluster "$CORE_CLUSTER" --services "$CORE_SERVICE
   --profile "$AWS_PROFILE" --region "$AWS_REGION"
 ```
 
-Open **https://main.dpn5tiolbymzn.amplifyapp.com** and verify your existing parent account still signs in. Core's Amplify proxy already forwards these pages; it needs no rebuild.
+Open **https://core.nnytech.ai** and verify your existing parent account still signs in. Core's Amplify proxy already forwards these pages; it needs no rebuild.
 
 If this returns **503**, stop before step 10. The service waiter alone does not verify the public HTTP response. A worker error such as `column identity_service.auth_name does not exist` means the new image is running without the branding schema. Run the explicit step 8 migration, wait for success, and let ECS replace the stopped service task. After migration succeeds, an `ecs update-service --force-new-deployment` on the existing service can start the replacement immediately; this is a user-run, billable deployment action. Do not rebuild the frontend or change DNS to resolve a missing database column.
 
@@ -190,7 +190,7 @@ If this returns **503**, stop before step 10. The service waiter alone does not 
 
 1. Sign into Core with your parent administrator account.
 2. Open **Axolotl Family → Users and permissions → Services → Axolotl News → Service settings**. The direct existing service settings address is:
-   **https://main.dpn5tiolbymzn.amplifyapp.com/organizations/family/services/403f3444-5e88-4308-8f2c-e0377cc66cad/settings/**.
+   **https://core.nnytech.ai/organizations/family/services/403f3444-5e88-4308-8f2c-e0377cc66cad/settings/**.
 3. Keep the existing Slug, Name, and Active settings.
 4. Set **Auth name** to `Axolotl News`.
 5. Set **Auth tagline** to `Your next axolotl story starts here.`
