@@ -27,6 +27,7 @@ _assistant = None
 _accounts = None
 _games = None
 _feedback = None
+_game_scores = None
 
 class APIError(Exception):
     def __init__(self, status, message):
@@ -368,6 +369,18 @@ def dispatch(event):
         api = SimpleNamespace(authorize=authorize, clients=clients)
         try: return _feedback.dispatch(api, event, method, path, body)
         except _feedback.FeedbackError as error: raise APIError(error.status, error.message)
+    if path == '/game-scores' or path.startswith('/game-scores/'):
+        global _game_scores
+        if _game_scores is None:
+            import importlib.util
+            from pathlib import Path
+            spec = importlib.util.spec_from_file_location('axolotl_game_scores', Path(__file__).with_name('game_scores.py'))
+            _game_scores = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(_game_scores)
+        from types import SimpleNamespace
+        api = SimpleNamespace(authorize=authorize, clients=clients)
+        try: return _game_scores.dispatch(api, event, method, path, body)
+        except _game_scores.ScoreError as error: raise APIError(error.status, error.message)
     if path == '/games' or path.startswith('/games/'):
         global _games
         if _games is None:

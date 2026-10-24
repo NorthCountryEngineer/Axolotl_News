@@ -21,6 +21,30 @@ Layouts use saved seeds. Collectibles, obstacle placement, falling patterns, and
 
 Winning advances to a level-complete screen with a **Next level** button. Each level starts with fresh lives and time; adventure scores and elapsed time accumulate across completed levels. Losing allows a retry of that level. Published layouts remain the tested snapshot until a new revision is published. Existing version 1 games retain their original single-level rules and layout, and can be upgraded by adding levels.
 
+## Asteroids options and high scores
+
+Describe **“An Asteroids game with 3 levels”**, or choose **Dodge obstacles → Enable Asteroids arcade options** in the game details. The Asteroids preset enables all five options below. Ordinary existing games retain their original controls until you enable the options. Options apply to the whole game; individual levels still configure their own collection goal, time, lives, difficulty, world, and layout seed.
+
+| Creator option | Effect |
+| --- | --- |
+| Turn the axolotl-ship 360 degrees | Left/Right or A/D turn; Up/W thrusts forward; Down/S reverses. Turning does not move the ship by itself. With this option off, arrows or WASD move directly. |
+| Shoot asteroids | Space, Z, or the on-screen **Fire** button fires in the ship's forward direction. Without rotation, the ship fires upward. |
+| Split large asteroids into smaller pieces | One shot breaks a large asteroid into exactly two smaller pieces. Each small piece takes one further shot to disappear. With splitting off, one shot removes the large asteroid. Requires shooting. |
+| Track points | Each collected treasure gives 10 points; a large asteroid's first hit gives 20; destroying each small piece gives 50. Points are separate from the collection count used to finish a level. |
+| Show a high-score board | Adds arcade-name entry after a completed published-game adventure, winning or losing. Requires points. Private playtests and intermediate level-complete screens never submit scores. |
+
+Disabling shooting also disables splitting; disabling points also disables high scores. You can make the same changes conversationally, for example **“Rotation off”**, **“Shooting off”**, **“Splitting off”**, **“Points off”**, or **“High scores off”**. Switching the game to collecting or platform jumping removes the Asteroids options. Refresh the authored instructions if needed, save, and playtest the changed version before publishing. The player also shows help for the enabled controls. P or Escape pauses, R restarts the current level, and touch controls are provided. Pause, loss of focus, and touch cancellation release held input.
+
+Points accumulate across the completed levels and the current level. Retrying a level replaces that attempt's points instead of adding another copy; **Restart game** clears the adventure totals. Winning still requires the level's collection target before its timer expires. Shooting asteroids does not advance that collection target.
+
+The connected site has a **shared board per published game edition**. Anyone can read it; only signed-in players can submit to it. The shared board keeps each player's best score and the arcade nickname attached to that score, showing the ten highest entries. Names are public, so use a nickname rather than a real name: 1–16 letters, numbers, spaces, underscores, or hyphens. Anonymous visitors can save on **This browser** instead, which keeps the ten highest nickname records. Browser scores stay in that browser's storage and are separate from shared scores; local preview uses only browser scores.
+
+Choose **Sign in** beside the board before playing a round you want to save publicly. Core returns to that game's page. Player sign-in is checked separately from editor access: an authorized Core player can save a shared score without receiving newsroom editing, administration, or publishing permissions.
+
+**Every new publication starts a new board**, including republishing unchanged rules. Draft edits leave the current public edition and its board intact until publication. Unpublishing or deleting a game removes its shared board. Duplicating a game creates a private draft with no inherited board. A stale tab cannot submit against a different published edition.
+
+High scores are casual, client-reported results. The API checks authentication, the current published edition, enabled options, valid names, reviewed level order, collection/time bounds, and a conservative maximum point total. It does not replay the browser game or prove that an unmodified client earned the score; this is not an anti-cheat system. The isolated iframe never receives names or credentials and never submits a score itself. Saving a score is an explicit action outside the game player.
+
 ## Permissions and administration
 
 Game studio reuses the permissions already installed for this newsroom; this release does not require new Core permission codes or new accounts.
@@ -30,7 +54,8 @@ Game studio reuses the permissions already installed for this newsroom; this rel
 | Editor | `posts-write` | Create games, converse, edit and test owned private drafts |
 | Publisher | `posts-write` and `posts-publish` | Review and manage all drafts; publish, unpublish, duplicate, and delete games |
 | Game creation settings | `agents-manage` or `admin`, plus newsroom access | Pause or resume creation; select an optional configured assistant mode |
-| Anonymous visitor | None | List and play published snapshots only |
+| Signed-in player | Active Core account authorized for this application | Save shared high scores; this grants no editor or publishing access |
+| Anonymous visitor | None | Play published games, read shared scores, and save browser-only scores |
 
 Administrators use **Game studio → Game settings** to turn game creation off. The server rejects new games, edits, conversation turns, duplicates and publication while creation is paused. Published games stay playable. Existing drafts remain available for reading and playtesting, and authorized administrators can still unpublish or delete content. Stale open tabs cannot bypass the switch: each mutation checks current permissions and a transactional settings revision.
 
@@ -49,7 +74,8 @@ Model output must be a complete, strictly validated game definition, including t
 - The fixed player engine runs in an iframe with `sandbox="allow-scripts"`. It has no same-origin permission, forms, popups, top navigation, or app storage access.
 - A restrictive document policy blocks network resources. The game definition is passed through a validated message channel tied to that iframe and an individual play session.
 - The parent accepts a playtest completion only from its current player session. Draft changes replace that player and clear its approval.
-- Game drafts, conversations and settings live in the dedicated `GameDrafts` table. Only explicitly copied, allowlisted public fields live in `PublishedGames`.
+- Game drafts, conversations and settings live in the dedicated `GameDrafts` table. Published definitions are copied into `PublishedGames`; their public responses contain only allowlisted fields.
+- Shared high scores reuse the existing published-game table under separate record keys. Public responses include arcade names, points, and dates, without exposing account identifiers or internal submission receipts. Browser-only scores use a separate local-storage namespace and never write to AWS.
 - Both tables are encrypted, retained, and use on-demand capacity. They are accessed through the Core-authorized API; browsers receive no table credentials.
 - Revision checks prevent stale browser tabs from overwriting newer drafts, tests, publications or deletions. Publication is a transaction that copies a tested definition and checks the draft/settings revision.
 - Game play is entirely in the browser: there is no Lambda invocation per frame, hosted game server, paid model turn, subscription or per-player cloud job.
@@ -60,7 +86,7 @@ From the existing repository:
 
 ```sh
 cd "/Users/ericyager/Documents/ChatGPT/Axolotl News"
-git switch codex/game-levels-release
+git switch codex/asteroids-arcade
 npm run test
 python3 -m unittest discover -s tests -p 'test_*.py'
 npm run build:preview
@@ -71,9 +97,11 @@ Open `http://127.0.0.1:5174`. The existing `.env.local` should contain `VITE_APP
 
 Validate the whole path: create a three-level game, refine one level conversationally, shuffle its layout, save, and check the review checklist is empty. Test a level in isolation, then the other levels or the full adventure. Acknowledge only after all levels have been reviewed, publish, and open Games. Confirm next-level transitions, retry, adventure totals, keyboard, touch, and pause. Edit a draft and verify its public version stays unchanged. Retest and republish, then duplicate/unpublish/delete with Admin actions on. Turn creation off, try to create or edit, and verify the existing public game still plays.
 
+For Asteroids, verify each option independently: rotate and reverse; turn rotation off and use direct movement; fire with Space, Z, and touch; split one large rock into two and remove both with one hit each; turn splitting and scoring off separately. Confirm that shooting changes points without advancing the collection goal, retries do not add duplicate level points, and a completed published round accepts a nickname. Reload to check browser-score persistence. Shared-score acceptance additionally requires a connected Core session and the updated API; verify signed-out submission rejection, per-game/per-edition separation, best-score retention, and a fresh board after republishing. A browser preview alone cannot prove shared AWS behavior.
+
 ## Existing AWS release
 
-The initial Game studio release installed **two DynamoDB tables**, two Lambda environment bindings (`GAME_DRAFT_TABLE` and `GAME_PUBLIC_TABLE`), and a table-scoped data policy with condition-check-only access to the existing assistant registry. The API archive includes `games.py`. The level extension reuses those resources and requires an API code update followed by the frontend update; it adds no infrastructure or model subscription. Existing post tables, media, credentials, and provider settings are preserved. Building or testing locally does not deploy a release.
+The initial Game studio release installed **two DynamoDB tables**, two Lambda environment bindings (`GAME_DRAFT_TABLE` and `GAME_PUBLIC_TABLE`), and a table-scoped data policy with condition-check-only access to the existing assistant registry. The level and Asteroids extensions reuse those resources and require an API code update followed by the frontend update; they add no infrastructure, IAM grants, model subscription, or per-frame server execution. The API archive must include the updated game schema, designer, and score handlers before the matching frontend is released. Existing post tables, media, credentials, and provider settings are preserved. Building or testing locally does not deploy a release.
 
 Use the existing API-first release process with this branch's template and archive, then release the same source revision to the existing Amplify app. Review a CloudFormation change set first. For an existing Game studio installation, expect only the function code update; stop if it proposes replacing or removing existing content or identity resources. Keep all existing stack parameters with `UsePreviousValue`, changing only `LambdaCodeKey` to the newly packaged archive. If the installation predates Game studio, its two game table bindings and permissions must be installed before the frontend. No Core deployment, DNS change, model subscription, or model activation is needed.
 

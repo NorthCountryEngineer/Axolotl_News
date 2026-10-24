@@ -48,10 +48,15 @@ async function exchange(fields: Record<string, string>, generation = sessionGene
   }
   sessionStorage.setItem(tokenKey, JSON.stringify(tokens)); return tokens;
 }
-export async function beginCoreLogin(action: 'login' | 'signup' = 'login') {
+function loginReturnPath(value: unknown = '/studio'): string {
+  if (typeof value === 'string' && (value === '/studio' || value === '/games' || /^\/games\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))) return value;
+  throw new Error('Choose a newsroom or game page before starting sign-in.');
+}
+export async function beginCoreLogin(action: 'login' | 'signup' = 'login', returnTo = '/studio') {
+  const destination = loginReturnPath(returnTo);
   const c = config(), verifier = b64(crypto.getRandomValues(new Uint8Array(48))), state = b64(crypto.getRandomValues(new Uint8Array(32)));
   const challenge = b64(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
-  sessionStorage.setItem(flowKey, JSON.stringify({ verifier, state, at: Date.now() }));
+  sessionStorage.setItem(flowKey, JSON.stringify({ verifier, state, at: Date.now(), returnTo: destination }));
   const url = new URL(`${c.issuer}/oauth/authorize/`);
   url.search = new URLSearchParams({ client_id: c.browser_client_id, redirect_uri: c.redirect_uri, response_type: 'code', scope: 'openid authorization', state, code_challenge: challenge, code_challenge_method: 'S256' }).toString();
   if (action === 'signup') {
@@ -68,11 +73,12 @@ export function completeCoreLogin(): Promise<void> {
     if (!stored) throw new Error('Sign-in state is missing. Start sign-in again.');
     const flow = JSON.parse(stored);
     if (params.get('state') !== flow.state || Date.now() - flow.at > 600000 || flow.at > Date.now()) throw new Error('Sign-in state is invalid or expired. Start sign-in again.');
+    const destination = loginReturnPath(flow.returnTo);
     if (params.has('iss') && params.get('iss') !== c.issuer) throw new Error('Unexpected sign-in issuer.');
     if (params.has('error')) throw new Error(authorizationError(params.get('error')));
     if (!params.get('code')) throw new Error('Core did not return a sign-in code. Start sign-in again.');
     await exchange({ grant_type: 'authorization_code', code: params.get('code')!, redirect_uri: c.redirect_uri, code_verifier: flow.verifier });
-    history.replaceState({}, '', '/studio');
+    history.replaceState({}, '', destination);
   })(); return callback;
 }
 async function accessToken(): Promise<string> {
@@ -98,6 +104,13 @@ export async function coreSession(): Promise<boolean> {
   if (!readTokens()) return false;
   try { const session = await coreRequest<{ permissions?: unknown }>('/session'); return Array.isArray(session.permissions) && session.permissions.includes('posts-write'); }
   catch (e) { throw new Error(`Newsroom access check failed: ${e instanceof Error ? e.message : 'The publishing service could not be reached.'}`); }
+}
+/** Player identity grants score submission, never access to the editing workspace. */
+export async function corePlayerSession(): Promise<{ authenticated: boolean; canEdit: boolean }> {
+  if (!readTokens()) return { authenticated: false, canEdit: false };
+  const session = await coreRequest<unknown>('/game-scores/session');
+  if (!session || typeof session !== 'object' || Array.isArray(session) || Object.keys(session).sort().join(',') !== 'authenticated,canEdit' || (session as { authenticated?: unknown }).authenticated !== true || typeof (session as { canEdit?: unknown }).canEdit !== 'boolean') throw new Error('Core returned an invalid player session. Sign in again to continue.');
+  return { authenticated: true, canEdit: (session as { canEdit: boolean }).canEdit };
 }
 export async function coreAdminSession(): Promise<boolean> {
   if (!readTokens()) return false;

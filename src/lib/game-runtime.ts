@@ -1,8 +1,9 @@
 import { validateGameSpec } from './game-design';
 import type { GameLevel, GameResult, GameSpec } from './game-types';
 
-export type GameInput = { left?: boolean; right?: boolean; up?: boolean; down?: boolean; jump?: boolean };
-export type GameEntity = { id: number; kind: 'snack' | 'hazard'; x: number; y: number; w: number; h: number; vx: number; vy: number };
+export type GameInput = { left?: boolean; right?: boolean; up?: boolean; down?: boolean; jump?: boolean; fire?: boolean };
+export type GameEntity = { id: number; kind: 'snack' | 'hazard'; x: number; y: number; w: number; h: number; vx: number; vy: number; asteroid?: 'large' | 'small'; grace?: number };
+export type GameBullet = { id: number; x: number; y: number; vx: number; vy: number; ttl: number };
 export type GamePlatform = { x: number; y: number; w: number; h: number };
 export type GameState = {
   player: { x: number; y: number; w: number; h: number; vy: number; grounded: boolean };
@@ -20,6 +21,10 @@ export type GameState = {
   outcome: 'playing' | 'won' | 'lost';
   levelIndex: number;
   levelId: string;
+  angle?: number;
+  bullets?: GameBullet[];
+  fireCooldown?: number;
+  points?: number;
 };
 
 /** Self-contained so the exact tested engine can also run in an opaque-origin iframe. */
@@ -37,8 +42,30 @@ export function createGameEngine() {
     if (!level) throw new Error('Choose a level in this game.');
     return { ...spec, theme: level.theme, rules: { ...level.rules } };
   }
+  function maxPoints(spec: GameSpec, selectedLevelIds?: string[]) {
+    if (!spec.arcade?.scoring) return 0;
+    return getLevels(spec).filter(level => !selectedLevelIds || selectedLevelIds.includes(level.id)).reduce((total, level) => total + level.rules.goal * 10 + (Math.ceil(level.rules.timeLimit / 0.5) + 8) * (spec.arcade?.splitAsteroids ? 120 : 20), 0);
+  }
+  // Segment against a rectangle expanded by the projectile radius. Relative
+  // motion catches fast bullets even when a moving asteroid crosses their path.
+  function sweptHit(x: number, y: number, dx: number, dy: number, target: GameEntity, radius = 3) {
+    let near = 0, far = 1;
+    for (const [position, delta, low, high] of [[x, dx, target.x - radius, target.x + target.w + radius], [y, dy, target.y - radius, target.y + target.h + radius]]) {
+      if (Math.abs(delta) < 1e-9) { if (position < low || position > high) return undefined; }
+      else {
+        const a = (low - position) / delta, b = (high - position) / delta;
+        near = Math.max(near, Math.min(a, b)); far = Math.min(far, Math.max(a, b));
+        if (near > far) return undefined;
+      }
+    }
+    return near;
+  }
   function spawn(state: GameState, spec: GameSpec, kind: 'snack' | 'hazard') {
-    const size = kind === 'snack' ? 22 : 30;
+    const arcade = spec.genre === 'dodge' && spec.arcade;
+    // Reserve both future fragments while a large rock is alive, so splitting
+    // always creates exactly two fragments without allowing entity explosions.
+    if (arcade && state.entities.reduce((count, entity) => count + (entity.kind === 'hazard' && entity.asteroid !== 'small' ? 2 : 1), 0) + (kind === 'hazard' ? 2 : 1) > 128) return;
+    const size = kind === 'snack' ? 22 : arcade && (arcade.shooting || arcade.rotation) ? 42 : 30;
     for (let attempt = 0; attempt < (spec.version === 2 ? 40 : 1); attempt++) {
       let x = 35 + random(state) * (width - 70 - size), y = 35 + random(state) * (height - 130 - size), vx = 0, vy = 0;
       if (spec.genre === 'platformer') {
@@ -54,7 +81,7 @@ export function createGameEngine() {
       }
       // Keep the initial board playable without an unavoidable hit at spawn.
       if (spec.genre === 'collect' && Math.abs(x - state.player.x) < 95 && Math.abs(y - state.player.y) < 95) x = x < width / 2 ? width - 100 : 50;
-      const entity = { id: state.nextId, kind, x, y, w: size, h: size, vx, vy };
+      const entity: GameEntity = { id: state.nextId, kind, x, y, w: size, h: size, vx, vy, ...(arcade && kind === 'hazard' ? { asteroid: 'large' as const } : {}) };
       if (spec.version === 2 && attempt < 39 && (overlaps({ ...state.player, x: state.player.x - 16, y: state.player.y - 16, w: state.player.w + 32, h: state.player.h + 32 }, entity) || state.entities.some(other => overlaps({ ...other, x: other.x - 8, y: other.y - 8, w: other.w + 16, h: other.h + 16 }, entity)))) continue;
       state.entities.push(entity); state.nextId++; return;
     }
@@ -68,6 +95,9 @@ export function createGameEngine() {
       player: { x: spec.genre === 'platformer' ? 48 : 460, y: spec.genre === 'platformer' ? 464 : spec.genre === 'dodge' ? 448 : 260, w: 42, h: 34, vy: 0, grounded: spec.genre === 'platformer' },
       entities: [], platforms: spec.genre === 'platformer' ? [{ x: 0, y: 500, w: 960, h: 40 }, { x: 40, y: 420, w: 270, h: 16 }, { x: 250, y: 340, w: 270, h: 16 }, { x: 460, y: 260, w: 270, h: 16 }, { x: 650, y: 180, w: 270, h: 16 }, { x: 430, y: 100, w: 270, h: 16 }] : [],
       score: 0, lives: spec.rules.lives, elapsed: 0, invulnerable: 1, nextSnack: 0.4, nextHazard: 0.7, seed: original.version === 2 ? levels[index].seed : 17031, nextId: 1, previousJump: false, outcome: 'playing', levelIndex: index, levelId: levels[index].id,
+      ...(spec.arcade?.rotation || spec.arcade?.shooting ? { angle: -Math.PI / 2 } : {}),
+      ...(spec.arcade?.shooting ? { bullets: [], fireCooldown: 0 } : {}),
+      ...(spec.arcade?.scoring ? { points: 0 } : {}),
     };
     if (original.version === 2 && spec.genre === 'platformer') {
       // Each successive surface overlaps the last by at least 50px, so even the
@@ -87,6 +117,7 @@ export function createGameEngine() {
     const spec = forLevel(original, state.levelIndex || 0);
     if (state.outcome !== 'playing' || !Number.isFinite(elapsed) || elapsed <= 0) return state;
     const dt = Math.min(elapsed, 1 / 20), player = state.player;
+    const arcade = spec.genre === 'dodge' ? spec.arcade : undefined;
     state.elapsed = Math.min(spec.rules.timeLimit, state.elapsed + dt);
     state.invulnerable = Math.max(0, state.invulnerable - dt);
     const speed = 110 + spec.player.speed * 32;
@@ -107,6 +138,11 @@ export function createGameEngine() {
         }
       }
       if (player.y > height + 60) { state.lives--; player.x = 48; player.y = 464; player.vy = 0; state.invulnerable = 1.5; }
+    } else if (arcade?.rotation) {
+      state.angle = (((state.angle ?? -Math.PI / 2) + dx * 2.8 * dt) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+      const thrust = Number(Boolean(input.up)) - Number(Boolean(input.down));
+      player.x = Math.max(0, Math.min(width - player.w, player.x + Math.cos(state.angle) * thrust * speed * dt));
+      player.y = Math.max(12, Math.min(height - player.h - 15, player.y + Math.sin(state.angle) * thrust * speed * dt));
     } else {
       if (dx && dy) { dx /= Math.SQRT2; dy /= Math.SQRT2; }
       player.x = Math.max(0, Math.min(width - player.w, player.x + dx * speed * dt));
@@ -117,9 +153,46 @@ export function createGameEngine() {
       if (state.nextSnack <= 0) { spawn(state, spec, 'snack'); state.nextSnack = Math.min(0.8, spec.rules.timeLimit / (spec.rules.goal * 1.7)); }
       if (state.nextHazard <= 0) { spawn(state, spec, 'hazard'); state.nextHazard = 1.15 - spec.rules.difficulty * 0.13; }
     }
+    if (arcade?.shooting) {
+      state.bullets ||= [];
+      state.fireCooldown = Math.max(0, (state.fireCooldown || 0) - dt);
+      if (input.fire && !state.fireCooldown && state.bullets.length < 32) {
+        const angle = arcade.rotation ? (state.angle ?? -Math.PI / 2) : -Math.PI / 2;
+        state.bullets.push({ id: state.nextId++, x: player.x + player.w / 2 + Math.cos(angle) * 25, y: player.y + player.h / 2 + Math.sin(angle) * 25, vx: Math.cos(angle) * 620, vy: Math.sin(angle) * 620, ttl: 1.6 });
+        state.fireCooldown = 0.22;
+      }
+    }
     const collected = new Set<number>();
+    const destroyed = new Set<number>(), fragments: GameEntity[] = [];
+    if (arcade?.shooting && state.bullets) {
+      state.bullets = state.bullets.filter(bullet => {
+        const dx = bullet.vx * dt, dy = bullet.vy * dt;
+        let nearest: GameEntity | undefined, first = Infinity;
+        for (const entity of state.entities) {
+          if (entity.kind !== 'hazard' || destroyed.has(entity.id)) continue;
+          const hit = sweptHit(bullet.x, bullet.y, dx - entity.vx * dt, dy - entity.vy * dt, entity);
+          if (hit !== undefined && hit < first) { nearest = entity; first = hit; }
+        }
+        if (nearest) {
+          destroyed.add(nearest.id);
+          if (arcade.scoring) state.points = (state.points || 0) + (nearest.asteroid === 'small' ? 50 : 20);
+          if (arcade.splitAsteroids && nearest.asteroid !== 'small') {
+            const jitter = (random(state) - 0.5) * 0.3;
+            for (const side of [-1, 1]) {
+              const angle = Math.atan2(nearest.vy || 100, nearest.vx) + side * 0.65 + jitter, speed = Math.max(100, Math.hypot(nearest.vx, nearest.vy) * 0.8);
+              fragments.push({ id: state.nextId++, kind: 'hazard', asteroid: 'small', x: Math.max(0, Math.min(width - 20, nearest.x + nearest.w / 2 - 10 + side * 8 + nearest.vx * dt * first)), y: nearest.y + nearest.h / 2 - 10 + nearest.vy * dt * first, w: 20, h: 20, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, grace: 0.18 });
+            }
+          }
+          return false;
+        }
+        bullet.x += dx; bullet.y += dy; bullet.ttl -= dt;
+        return bullet.ttl > 0 && bullet.x > -30 && bullet.x < width + 30 && bullet.y > -30 && bullet.y < height + 30;
+      });
+    }
     for (const entity of state.entities) {
+      if (destroyed.has(entity.id)) continue;
       entity.x += entity.vx * dt; entity.y += entity.vy * dt;
+      if (entity.grace) entity.grace = Math.max(0, entity.grace - dt);
       if (spec.genre === 'collect') {
         if (entity.x <= 12 || entity.x + entity.w >= width - 12) entity.vx *= -1;
         if (entity.y <= 12 || entity.y + entity.h >= height - 35) entity.vy *= -1;
@@ -129,13 +202,13 @@ export function createGameEngine() {
         if (surface && (entity.x <= surface.x + 5 || entity.x + entity.w >= surface.x + surface.w - 5)) entity.vx *= -1;
       }
       if (!overlaps(player, entity)) continue;
-      if (entity.kind === 'snack') { collected.add(entity.id); state.score++; }
-      else if (!state.invulnerable) {
+      if (entity.kind === 'snack') { collected.add(entity.id); if (arcade?.scoring && state.score < spec.rules.goal) state.points = (state.points || 0) + 10; state.score++; }
+      else if (!state.invulnerable && !entity.grace) {
         state.lives--; state.invulnerable = 1.5;
         if (spec.genre === 'platformer') { player.x = 48; player.y = 464; player.vy = 0; }
       }
     }
-    state.entities = state.entities.filter(entity => !collected.has(entity.id) && entity.y < height + 60);
+    state.entities = state.entities.filter(entity => !collected.has(entity.id) && !destroyed.has(entity.id) && entity.y < height + 60 && (!arcade || entity.x > -60 && entity.x < width + 60)).concat(fragments);
     if (spec.genre !== 'dodge') for (let i = 0; i < collected.size && state.score < spec.rules.goal; i++) spawn(state, spec, 'snack');
     if (state.lives <= 0) { state.lives = 0; state.outcome = 'lost'; }
     else if (state.score >= spec.rules.goal) { state.score = spec.rules.goal; state.outcome = 'won'; }
@@ -146,7 +219,7 @@ export function createGameEngine() {
     if (state.outcome !== 'won' || state.levelIndex + 1 >= getLevels(spec).length) return undefined;
     return create(spec, state.levelIndex + 1);
   }
-  return { create, step, nextLevel, getLevels, forLevel, overlaps, width, height };
+  return { create, step, nextLevel, getLevels, forLevel, overlaps, sweptHit, maxPoints, width, height };
 }
 
 /** Treat the opaque frame's results as untrusted messages, never as permissions. */
@@ -164,7 +237,8 @@ export function validateGameResult(value: unknown, spec: GameSpec, levelId?: str
   if (result.outcome !== 'lost' && result.score !== maxScore) return;
   if (result.outcome === 'won' && (allowed.length !== levels.length || (Boolean(levelId) && levels.length > 1))) return;
   if (result.outcome === 'level-complete' && !levelId && allowed.length === levels.length) return;
-  return { outcome: result.outcome as GameResult['outcome'], elapsed: result.elapsed, score: result.score, reviewedLevelIds: [...result.reviewedLevelIds] as string[] };
+  if (spec.arcade?.scoring ? typeof result.points !== 'number' || !Number.isSafeInteger(result.points) || result.points < 0 || result.points > createGameEngine().maxPoints(spec, ids) : 'points' in result) return;
+  return { outcome: result.outcome as GameResult['outcome'], elapsed: result.elapsed, score: result.score, reviewedLevelIds: [...result.reviewedLevelIds] as string[], ...(spec.arcade?.scoring ? { points: result.points as number } : {}) };
 }
 
 export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, validate: typeof validateGameSpec, nonce: string) {
@@ -180,10 +254,15 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
   const restart = document.getElementById('restart') as HTMLButtonElement;
   let gameSpec: GameSpec | undefined, spec: GameSpec | undefined, selectedLevel: string | undefined, state: GameState | undefined, running = false, paused = false, notified = false;
   let previous = 0, accumulator = 0;
-  const reviews = new Map<string, { score: number; elapsed: number }>();
+  const reviews = new Map<string, { score: number; elapsed: number; points?: number }>();
   const keys = new Set<string>(), pressed = new Set<string>();
   const palette = { pond: ['#e4f2e8', '#b7d9c7', '#38796c', '#fffaf0'], space: ['#211d3e', '#3d355e', '#baaddb', '#f8edff'], garden: ['#f6f1cf', '#c9d8a5', '#6a8547', '#fffdf1'] };
-  const input = () => ({ left: keys.has('arrowleft') || keys.has('a') || pressed.has('left'), right: keys.has('arrowright') || keys.has('d') || pressed.has('right'), up: keys.has('arrowup') || keys.has('w') || pressed.has('up'), down: keys.has('arrowdown') || keys.has('s') || pressed.has('down'), jump: keys.has(' ') || pressed.has('jump') });
+  const input = () => ({ left: keys.has('arrowleft') || keys.has('a') || pressed.has('left'), right: keys.has('arrowright') || keys.has('d') || pressed.has('right'), up: keys.has('arrowup') || keys.has('w') || pressed.has('up'), down: keys.has('arrowdown') || keys.has('s') || pressed.has('down'), jump: keys.has(' ') || pressed.has('jump'), fire: keys.has(' ') || keys.has('z') || pressed.has('fire') });
+  function controlHelp() {
+    if (!spec) return '';
+    const movement = spec.arcade?.rotation ? 'Left / Right or A / D turn the ship through 360°. Up / W thrusts forward; Down / S reverses.' : spec.genre === 'platformer' ? 'Arrow keys or WASD move. Space or Up jumps.' : 'Arrow keys or WASD move.';
+    return `${movement}${spec.arcade?.shooting ? ` Space or Z fires.${spec.arcade.splitAsteroids ? ' Large asteroids split into two small pieces; shoot each small piece once to destroy it.' : ' One shot destroys an asteroid.'}` : ''}${spec.arcade?.scoring ? ` Collectibles: 10 points.${spec.arcade.shooting ? ` Large asteroids: 20 points.${spec.arcade.splitAsteroids ? ' Small pieces: 50 points.' : ''}` : ''}` : ''} P pauses. R restarts this level.`;
+  }
   function levelInstructions(brief: string) {
     if (!gameSpec || !spec) return '';
     if (gameSpec.version === 1) return gameSpec.instructions;
@@ -200,7 +279,8 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
     const levelInfo = engine.getLevels(gameSpec)[state.levelIndex];
     title.textContent = gameSpec.version === 1 ? spec.title : `${gameSpec.title} · Level ${state.levelIndex + 1}: ${levelInfo.title}`;
     instruction.textContent = levelInstructions(levelInfo.brief);
-    canvas.setAttribute('aria-label', `${gameSpec.title}, level ${state.levelIndex + 1}: ${levelInfo.title}. Collect ${spec.rules.goal} ${spec.objects.collectible}s and avoid ${spec.objects.hazard}s.`);
+    document.getElementById('controls-help')!.textContent = controlHelp();
+    canvas.setAttribute('aria-label', `${gameSpec.title}, level ${state.levelIndex + 1}: ${levelInfo.title}. Collect ${spec.rules.goal} ${spec.objects.collectible}s and avoid ${spec.objects.hazard}s. ${controlHelp()}`);
     announce.textContent = `Level ${state.levelIndex + 1} started. ${instruction.textContent}`; canvas.focus();
   }
   function reset() { if (gameSpec) begin(state?.levelIndex || 0, false); }
@@ -216,7 +296,7 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
   next.addEventListener('click', () => { if (gameSpec && state?.outcome === 'won' && !selectedLevel && state.levelIndex + 1 < engine.getLevels(gameSpec).length) begin(state.levelIndex + 1, false); });
   document.addEventListener('keydown', event => {
     const key = event.key.toLowerCase();
-    if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown', ' ', 'a', 'd', 'w', 's', 'p', 'escape', 'r'].includes(key) && !([start, pause, next, restart] as EventTarget[]).includes(event.target!)) {
+    if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown', ' ', 'a', 'd', 'w', 's', 'z', 'p', 'escape', 'r'].includes(key) && !([start, pause, next, restart] as EventTarget[]).includes(event.target!)) {
       event.preventDefault();
       if ((key === 'p' || key === 'escape') && !event.repeat) togglePause();
       else if (key === 'r' && !event.repeat) reset();
@@ -243,9 +323,13 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
       const levelInfo = engine.getLevels(gameSpec)[state.levelIndex];
       title.textContent = gameSpec.version === 1 ? spec.title : `${gameSpec.title} · Level ${state.levelIndex + 1}: ${levelInfo.title}`; instruction.textContent = levelInstructions(levelInfo.brief);
       restart.hidden = engine.getLevels(gameSpec).length === 1 || Boolean(selectedLevel);
-      canvas.setAttribute('aria-label', `${spec.title}. ${spec.genre === 'platformer' ? 'Use arrows or WASD to move and Space or Up to jump.' : 'Use arrows or WASD to move.'} Collect ${spec.rules.goal} ${spec.objects.collectible}s and avoid ${spec.objects.hazard}s.`);
+      canvas.setAttribute('aria-label', `${spec.title}. ${controlHelp()} Collect ${spec.rules.goal} ${spec.objects.collectible}s and avoid ${spec.objects.hazard}s.`);
+      document.getElementById('controls-help')!.textContent = controlHelp();
       document.getElementById('legend')!.textContent = `Glowing snack: ${spec.objects.collectible} · Obstacle: ${spec.objects.hazard}`;
       document.getElementById('jump')!.hidden = spec.genre !== 'platformer';
+      document.getElementById('fire')!.hidden = !spec.arcade?.shooting;
+      const labels: Record<string, string> = spec.arcade?.rotation ? { left: 'Turn left', right: 'Turn right', up: 'Thrust forward', down: 'Reverse thrust' } : { left: 'Move left', right: 'Move right', up: spec.genre === 'platformer' ? 'Move up or jump' : 'Move up', down: 'Move down' };
+      for (const button of document.querySelectorAll<HTMLButtonElement>('[data-control]')) if (labels[button.dataset.control!]) button.setAttribute('aria-label', labels[button.dataset.control!]);
       start.disabled = false; announce.textContent = 'Ready. Choose Start game.';
       parent.postMessage({ type: 'axolotl-game-loaded', nonce }, '*');
     } catch { announce.textContent = 'This game could not be loaded safely.'; }
@@ -273,16 +357,31 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
         ctx.fillStyle = '#fff8cf'; ctx.beginPath(); ctx.arc(x - 2, y - 3, 3, 0, Math.PI * 2); ctx.fill();
       } else {
         ctx.fillStyle = spec.theme === 'space' ? '#9b82a7' : '#718a84'; ctx.strokeStyle = '#405b55'; ctx.lineWidth = 2;
-        ctx.moveTo(x - 14, y + 7); ctx.lineTo(x - 10, y - 9); ctx.lineTo(x + 2, y - 14); ctx.lineTo(x + 14, y - 4); ctx.lineTo(x + 11, y + 13); ctx.lineTo(x - 7, y + 14); ctx.closePath(); ctx.fill(); ctx.stroke();
-        ctx.fillStyle = '#c5cec3'; ctx.beginPath(); ctx.arc(x - 4, y - 4, 3, 0, Math.PI * 2); ctx.fill();
+        const scale = entity.asteroid ? entity.w / 30 : 1;
+        ctx.moveTo(x - 14 * scale, y + 7 * scale); ctx.lineTo(x - 10 * scale, y - 9 * scale); ctx.lineTo(x + 2 * scale, y - 14 * scale); ctx.lineTo(x + 14 * scale, y - 4 * scale); ctx.lineTo(x + 11 * scale, y + 13 * scale); ctx.lineTo(x - 7 * scale, y + 14 * scale); ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#c5cec3'; ctx.beginPath(); ctx.arc(x - 4 * scale, y - 4 * scale, 3 * scale, 0, Math.PI * 2); ctx.fill();
       }
+    }
+    if (spec.arcade?.shooting) for (const bullet of state.bullets || []) {
+      const length = 11 / 620;
+      ctx.strokeStyle = '#fff4a2'; ctx.lineWidth = 5; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(bullet.x - bullet.vx * length, bullet.y - bullet.vy * length); ctx.lineTo(bullet.x, bullet.y); ctx.stroke();
+      ctx.strokeStyle = '#ec805b'; ctx.lineWidth = 2; ctx.stroke();
     }
     const p = state.player;
     if (!(state.invulnerable > 0 && Math.floor(state.elapsed * 9) % 2)) {
       const x = p.x + p.w / 2, y = p.y + p.h / 2;
       ctx.save(); ctx.translate(x, y);
+      if (spec.arcade?.rotation || spec.arcade?.shooting) {
+        // Local up is the forward nose. Rotate both the hull and the axolotl
+        // together so direction stays obvious while turning or reversing.
+        ctx.rotate((state.angle ?? -Math.PI / 2) + Math.PI / 2);
+        ctx.fillStyle = '#e8e3f2'; ctx.strokeStyle = '#615273'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(0, -25); ctx.lineTo(23, 17); ctx.lineTo(0, 11); ctx.lineTo(-23, 17); ctx.closePath(); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = '#fff2a1'; ctx.beginPath(); ctx.moveTo(0, -25); ctx.lineTo(5, -15); ctx.lineTo(-5, -15); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#a9d9e8'; ctx.beginPath(); ctx.ellipse(0, -1, 15, 15, 0, 0, Math.PI * 2); ctx.fill();
+      }
       ctx.fillStyle = spec.player.color; ctx.strokeStyle = '#593e55'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(12, 7); ctx.quadraticCurveTo(38, 4, 29, -7); ctx.quadraticCurveTo(21, 3, 10, -5); ctx.fill(); ctx.stroke();
+      if (!spec.arcade?.rotation && !spec.arcade?.shooting) { ctx.beginPath(); ctx.moveTo(12, 7); ctx.quadraticCurveTo(38, 4, 29, -7); ctx.quadraticCurveTo(21, 3, 10, -5); ctx.fill(); ctx.stroke(); }
       ctx.strokeStyle = '#b7658c'; ctx.lineWidth = 3;
       for (const side of [-1, 1]) for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.moveTo(side * 12, i * 4); ctx.lineTo(side * (23 - Math.abs(i) * 2), i * 10); ctx.stroke(); }
       ctx.fillStyle = spec.player.color; ctx.strokeStyle = '#593e55'; ctx.lineWidth = 2;
@@ -307,23 +406,24 @@ export function startGameSandbox(engine: ReturnType<typeof createGameEngine>, va
     if (state && spec) {
       const seconds = Math.max(0, Math.ceil(spec.rules.timeLimit - state.elapsed));
       const levelLabel = gameSpec && engine.getLevels(gameSpec).length > 1 ? `Level ${state.levelIndex + 1} / ${engine.getLevels(gameSpec).length} · ` : '';
-      const label = `${levelLabel}Snacks ${state.score} / ${spec.rules.goal} · Lives ${state.lives} · Time ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+      const label = `${levelLabel}Snacks ${state.score} / ${spec.rules.goal}${spec.arcade?.scoring ? ` · Points ${state.points || 0}` : ''} · Lives ${state.lives} · Time ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
       if (status.textContent !== label) status.textContent = label;
       const previousReviews = [...reviews.entries()].filter(([id]) => id !== state!.levelId).map(([, review]) => review);
       const totalScore = previousReviews.reduce((sum, review) => sum + review.score, state.score);
       const totalTime = previousReviews.reduce((sum, review) => sum + review.elapsed, state.elapsed);
-      document.getElementById('campaign')!.textContent = gameSpec && engine.getLevels(gameSpec).length > 1 ? `Adventure total: ${totalScore} treasures · ${Math.floor(totalTime / 60)}:${String(Math.floor(totalTime % 60)).padStart(2, '0')} played` : '';
+      const totalPoints = previousReviews.reduce((sum, review) => sum + (review.points || 0), state.points || 0);
+      document.getElementById('campaign')!.textContent = gameSpec && engine.getLevels(gameSpec).length > 1 ? `Adventure total: ${totalScore} treasures${spec.arcade?.scoring ? ` · ${totalPoints} points` : ''} · ${Math.floor(totalTime / 60)}:${String(Math.floor(totalTime % 60)).padStart(2, '0')} played` : '';
       if (state.outcome !== 'playing' && !notified) {
         notified = true; pause.disabled = true;
         const levels = engine.getLevels(gameSpec!);
-        reviews.set(state.levelId, { score: state.score, elapsed: state.elapsed });
+        reviews.set(state.levelId, { score: state.score, elapsed: state.elapsed, ...(spec.arcade?.scoring ? { points: state.points || 0 } : {}) });
         const reviewedLevelIds = levels.filter(level => reviews.has(level.id)).map(level => level.id);
-        const totals = [...reviews.values()].reduce((sum, review) => ({ score: sum.score + review.score, elapsed: sum.elapsed + review.elapsed }), { score: 0, elapsed: 0 });
+        const totals = [...reviews.values()].reduce<{ score: number; elapsed: number; points: number }>((sum, review) => ({ score: sum.score + review.score, elapsed: sum.elapsed + review.elapsed, points: sum.points + (review.points || 0) }), { score: 0, elapsed: 0, points: 0 });
         const hasNext = !selectedLevel && state.levelIndex + 1 < levels.length;
         next.hidden = state.outcome !== 'won' || !hasNext;
         const outcome = state.outcome === 'lost' ? 'lost' : hasNext || (selectedLevel && levels.length > 1) ? 'level-complete' : 'won';
         announce.textContent = state.outcome === 'won' ? hasNext ? `Level ${state.levelIndex + 1} complete. Choose Next level.` : selectedLevel && levels.length > 1 ? 'Selected level complete. Return to the editor to review another level.' : `Adventure complete! Collected ${totals.score} treasures.` : `Level ${state.levelIndex + 1} ended. Choose Restart level to try again.`;
-        parent.postMessage({ type: 'axolotl-game-result', nonce, result: { outcome, score: totals.score, elapsed: totals.elapsed, reviewedLevelIds } }, '*');
+        parent.postMessage({ type: 'axolotl-game-result', nonce, result: { outcome, score: totals.score, elapsed: totals.elapsed, reviewedLevelIds, ...(spec.arcade?.scoring ? { points: totals.points } : {}) } }, '*');
       }
     }
     draw(); requestAnimationFrame(frame);
@@ -338,5 +438,5 @@ export function gameSandboxDocument(nonce: string): string {
   if (!/^[a-zA-Z0-9_-]{16,100}$/u.test(nonce)) throw new Error('A safe random game nonce is required.');
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; media-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; worker-src 'none'"><style>
 *{box-sizing:border-box}body{margin:0;background:#fffaf0;color:#254e45;font:15px/1.4 system-ui,sans-serif}main{padding:12px}h2{font-size:20px;margin:0 0 6px}p{margin:7px 0}canvas{display:block;width:100%;aspect-ratio:16/9;background:#e4f2e8;border-radius:10px;outline-offset:3px}canvas:focus-visible,button:focus-visible{outline:3px solid #a94c7b}#status{font-weight:700;font-variant-numeric:tabular-nums}.buttons,.touch{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;margin-top:10px}button{font:inherit;min-height:44px;min-width:56px;padding:8px 15px;border:1px solid #497267;border-radius:8px;background:#fffaf0;color:#254e45;cursor:pointer;touch-action:none;user-select:none}button:active{background:#cce4d5}button:disabled{opacity:.5;cursor:default}#start{background:#254e45;color:#fffaf0}.touch button{font-size:20px;min-width:54px}[hidden]{display:none!important}#announce{min-height:22px;font-weight:600;text-align:center}#legend{font-size:13px;text-align:center}#instruction{font-size:14px} @media(max-width:500px){main{padding:6px}h2{font-size:18px}.touch{gap:5px}.touch button{padding:7px;min-width:44px}#instruction{font-size:12px}}
-</style></head><body><main><h2 id="title">Loading your game…</h2><div id="status" aria-label="Game score"></div><div id="campaign" aria-label="Adventure totals"></div><p id="instruction"></p><canvas id="game" width="960" height="540" tabindex="0">This game needs a browser with Canvas support. Keyboard and touch controls are provided.</canvas><p id="legend"></p><div class="buttons"><button id="start" disabled>Start game</button><button id="pause" disabled>Pause</button><button id="next" hidden>Next level</button><button id="restart" hidden>Restart game</button></div><div class="touch" aria-label="Game movement controls"><button type="button" data-control="left" aria-label="Move left">←</button><button type="button" data-control="up" aria-label="Move up or jump">↑</button><button type="button" data-control="down" aria-label="Move down">↓</button><button type="button" data-control="right" aria-label="Move right">→</button><button type="button" data-control="jump" id="jump" aria-label="Jump">Jump</button></div><p id="announce" role="status" aria-live="polite">Loading…</p><p style="text-align:center;font-size:12px">Arrow keys or WASD · Space to jump · P to pause · R to restart</p></main><script nonce="${nonce}">const __name = (fn) => fn; (${startGameSandbox.toString()})((${createGameEngine.toString()})(),(${validateGameSpec.toString()}),"${nonce}");</script></body></html>`;
+</style></head><body><main><h2 id="title">Loading your game…</h2><div id="status" aria-label="Game score"></div><div id="campaign" aria-label="Adventure totals"></div><p id="instruction"></p><canvas id="game" width="960" height="540" tabindex="0">This game needs a browser with Canvas support. Keyboard and touch controls are provided.</canvas><p id="legend"></p><div class="buttons"><button id="start" disabled>Start game</button><button id="pause" disabled>Pause</button><button id="next" hidden>Next level</button><button id="restart" hidden>Restart game</button></div><div class="touch" aria-label="Game movement controls"><button type="button" data-control="left" aria-label="Move left">←</button><button type="button" data-control="up" aria-label="Move up or jump">↑</button><button type="button" data-control="down" aria-label="Move down">↓</button><button type="button" data-control="right" aria-label="Move right">→</button><button type="button" data-control="jump" id="jump" aria-label="Jump">Jump</button><button type="button" data-control="fire" id="fire" aria-label="Fire" hidden>Fire ✦</button></div><p id="announce" role="status" aria-live="polite">Loading…</p><p id="controls-help" style="text-align:center;font-size:12px">Arrow keys or WASD · P to pause · R to restart</p></main><script nonce="${nonce}">const __name = (fn) => fn; (${startGameSandbox.toString()})((${createGameEngine.toString()})(),(${validateGameSpec.toString()}),"${nonce}");</script></body></html>`;
 }

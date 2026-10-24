@@ -50,6 +50,55 @@ test('callback validates state, exchanges code once, and discards ID token autho
   const tokens = JSON.parse(h.store.get('axolotl-core-tokens')!); assert.equal(tokens.access_token, 'opaque-access'); assert.ok(!tokens.id_token); assert.ok(!h.store.has('axolotl-core-flow')); assert.equal(h.redirects.at(-1), '/studio');
 });
 
+test('game sign-in preserves only an allowlisted local return path inside the PKCE flow', async () => {
+  for (const destination of ['/games', '/games/12345678-1234-4234-8234-1234567890ab']) {
+    const h = harness(); await h.api.beginCoreLogin('login', destination);
+    const flow = JSON.parse(h.store.get('axolotl-core-flow')!);
+    assert.equal(flow.returnTo, destination);
+    const authorize = new URL(h.redirects[0]);
+    assert.equal(authorize.searchParams.get('redirect_uri'), h.config.redirect_uri);
+    assert.equal(authorize.searchParams.has('returnTo'), false);
+    h.location.search = `?code=one-use-code&state=${flow.state}`;
+    await h.api.completeCoreLogin(); assert.equal(h.redirects.at(-1), destination);
+  }
+  for (const destination of ['https://evil.example/games', '//evil.example/games', '/games?next=private', '/games#private', '/games/not-a-game', '/games/12345678-1234-4234-8234-1234567890ab/extra', '/studio?post=private', '/feedback', '/\\evil.example']) {
+    const h = harness();
+    await assert.rejects(h.api.beginCoreLogin('login', destination), /game page/);
+    assert.equal(h.redirects.length, 0); assert.equal(h.store.size, 0); assert.equal(h.calls.length, 0);
+  }
+});
+
+test('callback rejects tampered return destinations and remains compatible with older studio flows', async () => {
+  const bad = harness(); await bad.api.beginCoreLogin();
+  const flow = JSON.parse(bad.store.get('axolotl-core-flow')!); flow.returnTo = 'https://evil.example';
+  bad.store.set('axolotl-core-flow', JSON.stringify(flow)); bad.location.search = `?code=code&state=${flow.state}`;
+  await assert.rejects(bad.api.completeCoreLogin(), /game page/); assert.equal(bad.calls.length, 0);
+  const old = harness(); await old.api.beginCoreLogin();
+  const oldFlow = JSON.parse(old.store.get('axolotl-core-flow')!); delete oldFlow.returnTo;
+  old.store.set('axolotl-core-flow', JSON.stringify(oldFlow)); old.location.search = `?code=code&state=${oldFlow.state}`;
+  await old.api.completeCoreLogin(); assert.equal(old.redirects.at(-1), '/studio');
+});
+
+test('player identity is separate from editor permission and its response contains no account data', async () => {
+  const h = harness(); assert.deepEqual(JSON.parse(JSON.stringify(await h.api.corePlayerSession())), { authenticated: false, canEdit: false }); assert.equal(h.calls.length, 0);
+  h.store.set('axolotl-core-tokens', JSON.stringify({ access_token: 'access', expires_at: Date.now() + 300000 }));
+  for (const canEdit of [false, true]) {
+    h.respond(async () => ({ ok: true, json: async () => ({ authenticated: true, canEdit }) }));
+    assert.deepEqual(JSON.parse(JSON.stringify(await h.api.corePlayerSession())), { authenticated: true, canEdit });
+    assert.equal(h.calls.at(-1)!.url, 'https://api.example.com/game-scores/session');
+    assert.equal(h.calls.at(-1)!.options.headers.Authorization, 'Bearer access');
+  }
+  for (const response of [null, [], {}, { authenticated: true }, { authenticated: 'true', canEdit: false }, { authenticated: false, canEdit: false }, { authenticated: true, canEdit: 'false' }, { authenticated: true, canEdit: false, subject: 'private' }]) {
+    h.respond(async () => ({ ok: true, json: async () => response }));
+    await assert.rejects(h.api.corePlayerSession(), /invalid player session/);
+  }
+  for (const status of [401, 403, 503]) {
+    h.respond(async () => ({ ok: false, status, json: async () => ({ error: 'Player access unavailable.' }) }));
+    await assert.rejects(h.api.corePlayerSession(), (error: any) => error.status === status);
+    assert.ok(h.store.has('axolotl-core-tokens'));
+  }
+});
+
 test('invalid state, expired flow, and unexpected issuer fail before token exchange', async () => {
   for (const bad of ['state', 'expired', 'issuer']) {
     const h = harness(); await h.api.beginCoreLogin(); const flow = JSON.parse(h.store.get('axolotl-core-flow')!);

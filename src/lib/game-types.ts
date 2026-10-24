@@ -1,4 +1,5 @@
 export type GameRules = { goal: number; timeLimit: number; lives: number; difficulty: number };
+export type GameArcadeOptions = { rotation: boolean; shooting: boolean; splitAsteroids: boolean; scoring: boolean; highScores: boolean };
 export type GameLevel = {
   id: string;
   title: string;
@@ -17,6 +18,7 @@ export type GameSpec = {
   rules: GameRules;
   objects: { collectible: string; hazard: string };
   instructions: string;
+  arcade?: GameArcadeOptions;
   progression?: string;
   levels?: GameLevel[];
 };
@@ -38,4 +40,4 @@ export type Game = {
 };
 export type GameConfig = { version: 1; revision: number; creationEnabled: boolean; assistantModeId: string };
 export type GameSettings = { config: GameConfig; canCreate: boolean; canPublish: boolean; canManage: boolean; canAdminContent: boolean };
-export type GameResult = { outcome: 'level-complete' | 'won' | 'lost'; elapsed: number; score: number; reviewedLevelIds: string[] };
+export type GameResult = { outcome: 'level-complete' | 'won' | 'lost'; elapsed: number; score: number; points?: number; reviewedLevelIds: string[] };
