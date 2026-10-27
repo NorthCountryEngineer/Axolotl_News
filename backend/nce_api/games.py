@@ -412,7 +412,7 @@ def can_manage(claims):
 
 def settings(api, claims):
     value, _ = config(api)
-    return {'config': value, 'canCreate': value['creationEnabled'] and 'posts-write' in claims.get('permissions', []),
+    return {'config': value, 'canCreate': value['creationEnabled'] and can_admin_content(claims),
         'canPublish': can_admin_content(claims), 'canManage': can_manage(claims), 'canAdminContent': can_admin_content(claims)}
 
 
@@ -745,7 +745,7 @@ def conversation(api, claims, game_id, body, event=None):
         if latest != value: fail('Game settings changed before the assistant started. Edit the draft to continue.', 409)
         af, _, agent, model = configured_model(api, claims, latest)
         generated, reply = model_spec(af, agent, model, state, message)
-        fresh_claims = api.authorize(event, 'posts-write') if event is not None else claims
+        fresh_claims = api.authorize(event, 'posts-write', 'posts-publish') if event is not None else claims
         if fresh_claims['sub'] != claims['sub']: fail('Your Core account changed during this request.', 403)
         if existing['owner'] != fresh_claims['sub'] and not can_admin_content(fresh_claims):
             fail('Your Core account no longer has permission to change this game.', 403)
@@ -773,7 +773,7 @@ def dispatch(api, event, method, path, body):
         state = json.loads(item['payload'])
         if state.get('status') != 'Published': fail('Published game not found.', 404)
         return public_output(state)
-    claims = api.authorize(event, 'posts-write')
+    claims = api.authorize(event, 'posts-write', 'posts-publish')
     if path == '/games/settings':
         if method == 'GET': return settings(api, claims)
         if method == 'PUT': return put_config(api, claims, body)

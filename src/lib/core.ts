@@ -1,9 +1,10 @@
+import type { GameStudioHostConfig } from './game-studio-host';
 import type { Post } from './model';
 import { extensionFor, mediaKeys, publicDocument, validateFile, validatePost } from './model';
 
 export const isCore = import.meta.env.VITE_APP_MODE === 'nce';
 const files = import.meta.glob('../../nce-config.json', { eager: true, import: 'default' });
-export type CoreConfig = { issuer: string; browser_client_id: string; redirect_uri: string; api_url: string; organization_id: string; service_id: string };
+export type CoreConfig = { issuer: string; browser_client_id: string; redirect_uri: string; api_url: string; organization_id: string; service_id: string; game_studio?: GameStudioHostConfig };
 export const coreConfig = Object.values(files)[0] as CoreConfig | undefined;
 if (isCore && !coreConfig) throw new Error('Missing nce-config.json. Follow docs/AWS_DEPLOYMENT.md.');
 type Tokens = { access_token: string; refresh_token?: string; expires_at: number };
@@ -49,7 +50,7 @@ async function exchange(fields: Record<string, string>, generation = sessionGene
   sessionStorage.setItem(tokenKey, JSON.stringify(tokens)); return tokens;
 }
 function loginReturnPath(value: unknown = '/studio'): string {
-  if (typeof value === 'string' && (value === '/studio' || value === '/games' || /^\/games\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))) return value;
+  if (typeof value === 'string' && (['/studio', '/games', '/game-studio', '/game-studio/legacy'].includes(value) || /^\/games\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) || /^\/game-studio(?:\/legacy)?\?game=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))) return value;
   throw new Error('Choose a newsroom or game page before starting sign-in.');
 }
 export async function beginCoreLogin(action: 'login' | 'signup' = 'login', returnTo = '/studio') {

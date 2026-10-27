@@ -51,7 +51,7 @@ test('callback validates state, exchanges code once, and discards ID token autho
 });
 
 test('game sign-in preserves only an allowlisted local return path inside the PKCE flow', async () => {
-  for (const destination of ['/games', '/games/12345678-1234-4234-8234-1234567890ab']) {
+  for (const destination of ['/games', '/games/12345678-1234-4234-8234-1234567890ab', '/game-studio', '/game-studio/legacy', '/game-studio/legacy?game=12345678-1234-4234-8234-1234567890ab', '/game-studio?game=12345678-1234-4234-8234-1234567890ab']) {
     const h = harness(); await h.api.beginCoreLogin('login', destination);
     const flow = JSON.parse(h.store.get('axolotl-core-flow')!);
     assert.equal(flow.returnTo, destination);
@@ -61,7 +61,7 @@ test('game sign-in preserves only an allowlisted local return path inside the PK
     h.location.search = `?code=one-use-code&state=${flow.state}`;
     await h.api.completeCoreLogin(); assert.equal(h.redirects.at(-1), destination);
   }
-  for (const destination of ['https://evil.example/games', '//evil.example/games', '/games?next=private', '/games#private', '/games/not-a-game', '/games/12345678-1234-4234-8234-1234567890ab/extra', '/studio?post=private', '/feedback', '/\\evil.example']) {
+  for (const destination of ['https://evil.example/games', '//evil.example/games', '/games?next=private', '/games#private', '/games/not-a-game', '/games/12345678-1234-4234-8234-1234567890ab/extra', '/game-studio?next=https://evil.example', '/game-studio/legacy?game=not-an-id', '/game-studio/legacy?game=12345678-1234-4234-8234-1234567890ab&next=x', '/studio?post=private', '/feedback', '/\\evil.example']) {
     const h = harness();
     await assert.rejects(h.api.beginCoreLogin('login', destination), /game page/);
     assert.equal(h.redirects.length, 0); assert.equal(h.store.size, 0); assert.equal(h.calls.length, 0);

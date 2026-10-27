@@ -94,6 +94,7 @@ class GameTests(unittest.TestCase):
         self.assertTrue(settings['canPublish']); self.assertTrue(settings['canManage'])
         self.claims['permissions'] = ['posts-write']
         settings = games.settings(self.api, self.claims)
+        self.assertFalse(settings['canCreate'])
         self.assertFalse(settings['canPublish']); self.assertFalse(settings['canManage'])
         self.assertFalse(settings['canAdminContent'])
 
@@ -201,6 +202,21 @@ class GameTests(unittest.TestCase):
         self.assertFalse(any(key.startswith('_') for key in result))
         listing = games.dispatch(self.api, {}, 'GET', '/games/published', {})
         self.assertEqual(listing['games'], [result]); self.authorization.assert_not_called()
+
+    def test_editor_cannot_enter_any_legacy_authoring_route_and_existing_records_are_preserved(self):
+        state = self.publish(self.finish_test(self.create()))
+        # An existing score record must never be rewritten by onboarding or denial.
+        score_id = games.key('game-score', GAME)
+        self.database.rows['published-games'][score_id] = {'id': score_id, 'payload': 'existing-high-score', 'revision': 7}
+        before = deepcopy(self.database.rows)
+        self.claims['permissions'] = ['posts-write']
+        routes = [('GET', '/games/settings'), ('PUT', '/games/settings'), ('GET', '/games'), ('POST', '/games'),
+            ('GET', '/games/' + GAME), ('PUT', '/games/' + GAME), ('DELETE', '/games/' + GAME)]
+        routes += [('POST', '/games/' + GAME + '/' + action) for action in ['message', 'test', 'publish', 'unpublish', 'duplicate']]
+        for method, path in routes:
+            self.error(403, lambda: games.dispatch(self.api, self.event(), method, path, {}))
+        self.assertEqual(self.database.rows, before)
+        self.assertEqual(games.dispatch(self.api, {}, 'GET', '/games/published/' + GAME, {})['publishedRevision'], state['publishedRevision'])
 
     def test_publishing_requires_exact_tested_revision_and_publish_permission(self):
         state = self.create(); self.error(409, lambda: self.publish(state))
@@ -407,6 +423,15 @@ class GameTests(unittest.TestCase):
             return {'output': {'message': {'content': [{'text': json.dumps({'text': 'Updated.', 'spec': deepcopy(state['spec'])})}]}}}
         self.provider.converse.side_effect = respond
         self.error(403, lambda: self.message(state))
+
+    def test_owner_losing_publisher_permission_during_paid_call_cannot_commit(self):
+        self.configure_model(); state = self.create()
+        def respond(**kwargs):
+            self.claims['permissions'] = ['posts-write']
+            return {'output': {'message': {'content': [{'text': json.dumps({'text': 'Updated.', 'spec': deepcopy(state['spec'])})}]}}}
+        self.provider.converse.side_effect = respond
+        self.error(403, lambda: self.message(state))
+        self.assertTrue(json.loads(self.stored()['payload']).get('_pending'))
 
     def test_manual_edit_racing_provider_completion_wins_without_overwrite(self):
         self.configure_model(); state = self.create()

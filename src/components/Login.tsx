@@ -3,9 +3,9 @@ import { signIn, confirmSignIn, resetPassword, confirmResetPassword } from 'aws-
 import { editorSession, isCloud, logout } from '../lib/api';
 import { beginCoreLogin, isCore } from '../lib/core';
 import { Axolotl } from './Axolotl';
-export function Login({onLogin}:{onLogin:()=>void}){
+export function Login({onLogin,returnTo='/studio'}:{onLogin:()=>void;returnTo?:string}){
   const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[code,setCode]=useState(''),[stage,setStage]=useState<'login'|'newPassword'|'reset'|'resetConfirm'|'code'>('login'),[error,setError]=useState(''),[busy,setBusy]=useState(false);
-  function openCore(action: 'login' | 'signup') { setBusy(true); setError(''); void beginCoreLogin(action).catch(e => { setError(e.message); setBusy(false); }); }
+  function openCore(action: 'login' | 'signup') { setBusy(true); setError(''); void beginCoreLogin(action,returnTo).catch(e => { setError(e.message); setBusy(false); }); }
   async function submit(e:FormEvent){e.preventDefault();setBusy(true);setError('');try{
     if(stage==='reset'){await resetPassword({username:email});setStage('resetConfirm');}
     else if(stage==='resetConfirm'){await confirmResetPassword({username:email,confirmationCode:code,newPassword:password});setStage('login');setPassword('');}
