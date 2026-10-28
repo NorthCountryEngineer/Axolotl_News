@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { validateGameSpec } from '../lib/game-design';
 import { createGameEngine, gameSandboxDocument, validateGameResult } from '../lib/game-runtime';
 import type { GameResult, GameSpec } from '../lib/game-types';
+import { PlayerSurface } from './PlayerSurface';
 
 export function GamePlayer({ spec, levelId, onComplete }: { spec: GameSpec; levelId?: string; onComplete?: (result: GameResult) => void }) {
   const fingerprint = JSON.stringify(spec);
@@ -38,9 +39,9 @@ export function GamePlayer({ spec, levelId, onComplete }: { spec: GameSpec; leve
   }, [instance, levelId]);
   if (instance.error) return <p role="alert">{instance.error}</p>;
   const ready = readyNonce === instance.nonce;
-  return <div className="game-player">
+  return <PlayerSurface key={instance.nonce} frame={iframe} nonce={instance.nonce} title={spec.title}>
     {!ready && <p role="status">{failedNonce === instance.nonce ? 'The game is taking longer to load. Reload the page to try again.' : 'Preparing your game…'}</p>}
     <iframe key={instance.nonce} ref={iframe} title={`${spec.title} — isolated game player`} srcDoc={instance.document} sandbox="allow-scripts" referrerPolicy="no-referrer" allow="camera 'none'; microphone 'none'; geolocation 'none'; payment 'none'; clipboard-read 'none'; clipboard-write 'none'; fullscreen 'none'" style={{ display: 'block', width: '100%', height: 'clamp(570px, 70vw, 850px)', border: 0, borderRadius: 12 }} onLoad={() => iframe.current?.contentWindow?.postMessage({ type: 'axolotl-game-load', nonce: instance.nonce, spec: instance.spec, levelId }, '*')} />
     <p className="game-player-note">The game runs in an isolated player. Use Start, Pause, Restart level, and the touch buttons, or click the game to use your keyboard. Complete a level to unlock the next one.</p>
-  </div>;
+  </PlayerSurface>;
 }

@@ -15,6 +15,8 @@ Game studio adds short, browser-based 2D arcade games to Axolotl News. The engin
 
 Changing the draft after a playtest invalidates that test. Changing a draft after publication leaves the last published game intact until a new tested revision is published. A playtest acknowledgement is a human review checkpoint, not an anti-cheat proof or a server-run game simulation.
 
+Published games and private playtests include a **Full screen** button. With the player focused, **F** or **Alt + Enter** toggles the view; **Escape** or **Exit full screen** returns to the page. The same round, timer and points stay mounted. When native fullscreen is unavailable, the player expands to fill the current window instead.
+
 ## Levels and procedural layouts
 
 A level plan explains the intended progression and each level's objective. The free guided designer builds an introduction, practice levels, and a finale from the requested rules. The configured generative assistant can instead design a tailored sequence from the creator's conversation, audience, and goals. Only the engine's supported mechanics can change: collection targets, time, lives, difficulty, world, and saved layout variation. A description cannot introduce an unsupported mechanic.
